@@ -27,6 +27,20 @@ func (l *Level) Size() (width, height int) {
 	return l.w, l.h
 }
 
+func (l *Level) Clamp(x, y float64) (float64, float64) {
+	if x < 0 {
+		x = 0
+	} else if x > float64(l.w)-1 {
+		x = float64(l.w)
+	}
+	if y < 0 {
+		y = 0
+	} else if y > float64(l.h)-1 {
+		y = float64(l.h)
+	}
+	return x, y
+}
+
 // NewLevel returns a new randomly generated Level.
 func NewLevel() (*Level, error) {
 	// Create a 108x108 Level.

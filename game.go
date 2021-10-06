@@ -36,9 +36,13 @@ type game struct {
 	w, h         int
 	currentLevel *Level
 
-	audioPlayer *audio.Player
+	audioPlayerGunshot *audio.Player
+	audioPlayerGib     *audio.Player
+	audioPlayerDie     *audio.Player
 
 	player *gamePlayer
+
+	gameOverTime time.Time
 
 	camScale   float64
 	camScaleTo float64
@@ -47,7 +51,7 @@ type game struct {
 
 	spinnerIndex int
 
-	creeps []*creep
+	creeps []*gameCreep
 
 	projectiles []*projectile
 
@@ -114,19 +118,39 @@ func NewGame() (*game, error) {
 
 	flashImage = ebiten.NewImageFromImage(img)
 
-	f, err = assetsFS.Open("assets/audio/gunshot.mp3")
+	loadSound := func(p string) (*audio.Player, error) {
+		f, err := assetsFS.Open(p)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+
+		gunshotSound, err := mp3.DecodeWithSampleRate(sampleRate, f)
+		if err != nil {
+			return nil, err
+		}
+
+		return audioContext.NewPlayer(gunshotSound)
+	}
+
+	g.audioPlayerGunshot, err = loadSound("assets/audio/gunshot.mp3")
 	if err != nil {
 		return nil, err
 	}
 
-	gunshotSound, err := mp3.DecodeWithSampleRate(sampleRate, f)
+	g.audioPlayerGib, err = loadSound("assets/audio/gib.mp3")
 	if err != nil {
 		return nil, err
 	}
-	g.audioPlayer, err = audioContext.NewPlayer(gunshotSound)
+
+	g.audioPlayerDie, err = loadSound("assets/audio/die.mp3")
 	if err != nil {
 		return nil, err
 	}
+
+	// The death sound will have a delay without this.
+	g.audioPlayerDie.SetVolume(0)
+	g.audioPlayerDie.Play()
 
 	f, err = assetsFS.Open("assets/creeps/vampire.png")
 	if err != nil {
@@ -141,15 +165,18 @@ func NewGame() (*game, error) {
 
 	addedCreeps := make(map[string]bool)
 	for i := 0; i < 1000; i++ {
-		c := &creep{
-			x:      float64(1 + rand.Intn(64)),
-			y:      float64(1 + rand.Intn(64)),
-			sprite: vampireImage,
+		c := NewCreep(vampireImage, g.currentLevel)
+
+		safeSpace := 7.0
+		dx, dy := deltaXY(g.player.x, g.player.y, c.x, c.y)
+		if dx <= safeSpace || dy <= safeSpace {
+			// Too close to the spawn point.
+			continue
 		}
 
 		addedCreep := fmt.Sprintf("%0.0f-%0.0f", c.x, c.y)
 		if addedCreeps[addedCreep] {
-			// Already added a creep here
+			// Already added a gameCreep here.
 			continue
 		}
 
@@ -159,6 +186,11 @@ func NewGame() (*game, error) {
 
 	ebiten.SetCursorShape(ebiten.CursorShapeCrosshair)
 
+	// The death sound will have a delay without this.
+	g.audioPlayerDie.Pause()
+	g.audioPlayerDie.Rewind()
+	g.audioPlayerDie.SetVolume(1.6)
+
 	return g, nil
 }
 
@@ -166,6 +198,11 @@ func NewGame() (*game, error) {
 func (g *game) Update() error {
 	if ebiten.IsWindowBeingClosed() {
 		g.exit()
+		return nil
+	}
+
+	if g.player.health <= 0 {
+		// Game over.
 		return nil
 	}
 
@@ -239,21 +276,23 @@ func (g *game) Update() error {
 
 		for _, c := range g.creeps {
 			cx, cy := c.Position()
-			dx, dy := p.x-cx, p.y-cy
-			if dx < 0 {
-				dx *= -1
-			}
-			if dy < 0 {
-				dy *= -1
-			}
+			dx, dy := deltaXY(p.x, p.y, cx, cy)
 			if dx <= bulletHitThreshold && dy <= bulletHitThreshold {
-				// Kill creep
+				// Kill gameCreep
 				g.addBloodSplatter(cx, cy)
 				c.x = 1000
 				c.y = 1000
+
 				// Remove projectile
 				g.projectiles = append(g.projectiles[:i-removed], g.projectiles[i-removed+1:]...)
 				removed++
+
+				// Play gib sound.
+				g.audioPlayerGib.SetVolume(1.0)
+				g.audioPlayerGib.Pause()
+				g.audioPlayerGib.Rewind()
+				g.audioPlayerGib.Play()
+
 				break
 			}
 		}
@@ -271,13 +310,15 @@ func (g *game) Update() error {
 		g.projectiles = append(g.projectiles, p)
 
 		v := 0.75 + (rand.Float64() / 4)
-		v = 1.0 // TODO
+		v = 0.6 // TODO
 
 		g.player.weapon.lastFire = time.Now()
-		g.audioPlayer.SetVolume(v)
-		g.audioPlayer.Pause()
-		g.audioPlayer.Rewind()
-		g.audioPlayer.Play()
+
+		// Play gunshot sound.
+		g.audioPlayerGunshot.SetVolume(v)
+		g.audioPlayerGunshot.Pause()
+		g.audioPlayerGunshot.Rewind()
+		g.audioPlayerGunshot.Play()
 	}
 
 	return nil
@@ -321,8 +362,20 @@ func (g *game) addBloodSplatter(x, y float64) {
 
 // Draw draws the game on the screen.
 func (g *game) Draw(screen *ebiten.Image) {
+	// Game over.
 	if g.player.health <= 0 {
-		screen.Fill(colornames.Red)
+		screen.Fill(color.RGBA{102, 0, 0, 255})
+
+		if time.Since(g.gameOverTime).Milliseconds()%2000 < 1500 {
+			g.overlayImg.Clear()
+			ebitenutil.DebugPrint(g.overlayImg, "GAME OVER")
+			g.op.GeoM.Reset()
+			g.op.GeoM.Translate(3, 0)
+			g.op.GeoM.Scale(16, 16)
+			g.op.GeoM.Translate(float64(g.w/2)-485, float64(g.h/2)-200)
+			screen.DrawImage(g.overlayImg, g.op)
+		}
+
 		return
 	}
 
@@ -415,15 +468,18 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 	biteThreshold := 0.5
 	for _, c := range g.creeps {
 		cx, cy := c.Position()
-		dx, dy := g.player.x-cx, g.player.y-cy
-		if dx < 0 {
-			dx *= -1
-		}
-		if dy < 0 {
-			dy *= -1
-		}
+		dx, dy := deltaXY(g.player.x, g.player.y, cx, cy)
 		if dx <= biteThreshold && dy <= biteThreshold {
 			g.player.health--
+
+			if g.player.health == 0 {
+				ebiten.SetCursorShape(ebiten.CursorShapeDefault)
+
+				g.gameOverTime = time.Now()
+
+				// Play die sound.
+				g.audioPlayerDie.Play()
+			}
 		}
 
 		drawn += g.renderSprite(c.x, c.y, 0, 0, 0, c.sprite, screen)
@@ -458,4 +514,15 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 
 func (g *game) exit() {
 	os.Exit(0)
+}
+
+func deltaXY(x1, y1, x2, y2 float64) (dx float64, dy float64) {
+	dx, dy = x1-x2, y1-y2
+	if dx < 0 {
+		dx *= -1
+	}
+	if dy < 0 {
+		dy *= -1
+	}
+	return dx, dy
 }
