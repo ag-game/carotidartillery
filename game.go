@@ -9,14 +9,12 @@ import (
 	"os"
 	"time"
 
-	"github.com/hajimehoshi/ebiten/v2/audio"
-
-	"github.com/hajimehoshi/ebiten/v2/audio/mp3"
-
-	"golang.org/x/image/colornames"
-
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/audio"
+	"github.com/hajimehoshi/ebiten/v2/audio/mp3"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
+	"golang.org/x/image/colornames"
 )
 
 var spinner = []byte(`-\|/`)
@@ -59,6 +57,8 @@ type game struct {
 
 	overlayImg *ebiten.Image
 	op         *ebiten.DrawImageOptions
+
+	godMode bool
 }
 
 const sampleRate = 48000
@@ -79,16 +79,16 @@ func NewGame() (*game, error) {
 
 	g := &game{
 		currentLevel: l,
-		camScale:     4,
-		camScaleTo:   4,
+		camScale:     2,
+		camScaleTo:   2,
 		mousePanX:    math.MinInt32,
 		mousePanY:    math.MinInt32,
 		player:       p,
 		op:           &ebiten.DrawImageOptions{},
 	}
 
-	g.player.x = 7
-	g.player.y = 7
+	g.player.x = float64(rand.Intn(108))
+	g.player.y = float64(rand.Intn(108))
 
 	// Load SpriteSheets.
 	g.ojasSS, err = LoadCharacterSpriteSheet()
@@ -137,11 +137,13 @@ func NewGame() (*game, error) {
 	if err != nil {
 		return nil, err
 	}
+	g.audioPlayerGunshot.SetVolume(0.6)
 
 	g.audioPlayerGib, err = loadSound("assets/audio/gib.mp3")
 	if err != nil {
 		return nil, err
 	}
+	g.audioPlayerGib.SetVolume(1.0)
 
 	g.audioPlayerDie, err = loadSound("assets/audio/die.mp3")
 	if err != nil {
@@ -196,12 +198,12 @@ func NewGame() (*game, error) {
 
 // Update reads current user input and updates the game state.
 func (g *game) Update() error {
-	if ebiten.IsWindowBeingClosed() {
+	if ebiten.IsKeyPressed(ebiten.KeyEscape) || ebiten.IsWindowBeingClosed() {
 		g.exit()
 		return nil
 	}
 
-	if g.player.health <= 0 {
+	if g.player.health <= 0 && !g.godMode {
 		// Game over.
 		return nil
 	}
@@ -227,8 +229,8 @@ func (g *game) Update() error {
 	g.camScaleTo += scrollY * (g.camScaleTo / 7)
 
 	// Clamp target zoom level.
-	if g.camScaleTo < 1 {
-		g.camScaleTo = 1
+	if g.camScaleTo < 2 {
+		g.camScaleTo = 2
 	} else if g.camScaleTo > 4 {
 		g.camScaleTo = 4
 	}
@@ -243,6 +245,11 @@ func (g *game) Update() error {
 
 	// Pan camera via keyboard.
 	pan := 0.05
+	// TODO debug only
+	if ebiten.IsKeyPressed(ebiten.KeyShift) {
+		pan *= 5
+	}
+
 	if ebiten.IsKeyPressed(ebiten.KeyLeft) || ebiten.IsKeyPressed(ebiten.KeyA) {
 		g.player.x -= pan
 	}
@@ -257,11 +264,7 @@ func (g *game) Update() error {
 	}
 
 	// Clamp camera position.
-	if g.player.y < 0.6 {
-		g.player.y = 0.6
-	} else if g.player.y > float64(g.currentLevel.h)-1.4 {
-		g.player.y = float64(g.currentLevel.h) - 1.4
-	}
+	g.player.x, g.player.y = g.currentLevel.Clamp(g.player.x, g.player.y)
 
 	// Update player angle.
 	cx, cy := ebiten.CursorPosition()
@@ -275,23 +278,28 @@ func (g *game) Update() error {
 		p.y += math.Sin(p.angle) * p.speed
 
 		for _, c := range g.creeps {
+			if c.health == 0 {
+				continue
+			}
+
 			cx, cy := c.Position()
 			dx, dy := deltaXY(p.x, p.y, cx, cy)
 			if dx <= bulletHitThreshold && dy <= bulletHitThreshold {
-				// Kill gameCreep
-				g.addBloodSplatter(cx, cy)
-				c.x = 1000
-				c.y = 1000
+				c.health--
+
+				// Killed creep.
+				if c.health == 0 {
+					g.addBloodSplatter(cx, cy)
+
+					// Play gib sound.
+					g.audioPlayerGib.Pause()
+					g.audioPlayerGib.Rewind()
+					g.audioPlayerGib.Play()
+				}
 
 				// Remove projectile
 				g.projectiles = append(g.projectiles[:i-removed], g.projectiles[i-removed+1:]...)
 				removed++
-
-				// Play gib sound.
-				g.audioPlayerGib.SetVolume(1.0)
-				g.audioPlayerGib.Pause()
-				g.audioPlayerGib.Rewind()
-				g.audioPlayerGib.Play()
 
 				break
 			}
@@ -309,16 +317,17 @@ func (g *game) Update() error {
 		}
 		g.projectiles = append(g.projectiles, p)
 
-		v := 0.75 + (rand.Float64() / 4)
-		v = 0.6 // TODO
-
 		g.player.weapon.lastFire = time.Now()
 
 		// Play gunshot sound.
-		g.audioPlayerGunshot.SetVolume(v)
 		g.audioPlayerGunshot.Pause()
 		g.audioPlayerGunshot.Rewind()
 		g.audioPlayerGunshot.Play()
+	}
+
+	// TODO debug only
+	if inpututil.IsKeyJustPressed(ebiten.KeyG) {
+		g.godMode = !g.godMode
 	}
 
 	return nil
@@ -363,7 +372,7 @@ func (g *game) addBloodSplatter(x, y float64) {
 // Draw draws the game on the screen.
 func (g *game) Draw(screen *ebiten.Image) {
 	// Game over.
-	if g.player.health <= 0 {
+	if g.player.health <= 0 && !g.godMode {
 		screen.Fill(color.RGBA{102, 0, 0, 255})
 
 		if time.Since(g.gameOverTime).Milliseconds()%2000 < 1500 {
@@ -467,12 +476,16 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 
 	biteThreshold := 0.5
 	for _, c := range g.creeps {
+		if c.health == 0 {
+			continue
+		}
+
 		cx, cy := c.Position()
 		dx, dy := deltaXY(g.player.x, g.player.y, cx, cy)
 		if dx <= biteThreshold && dy <= biteThreshold {
 			g.player.health--
 
-			if g.player.health == 0 {
+			if g.player.health == 0 && !g.godMode {
 				ebiten.SetCursorShape(ebiten.CursorShapeDefault)
 
 				g.gameOverTime = time.Now()

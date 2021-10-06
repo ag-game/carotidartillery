@@ -28,15 +28,15 @@ func (l *Level) Size() (width, height int) {
 }
 
 func (l *Level) Clamp(x, y float64) (float64, float64) {
-	if x < 0 {
-		x = 0
-	} else if x > float64(l.w)-1 {
-		x = float64(l.w)
+	if x < 0.3 {
+		x = 0.3
+	} else if x > float64(l.w)-1.3 {
+		x = float64(l.w) - 1.3
 	}
-	if y < 0 {
-		y = 0
-	} else if y > float64(l.h)-1 {
-		y = float64(l.h)
+	if y < 0.4 {
+		y = 0.4
+	} else if y > float64(l.h)-1.8 {
+		y = float64(l.h) - 1.8
 	}
 	return x, y
 }
