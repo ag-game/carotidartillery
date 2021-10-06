@@ -13,6 +13,8 @@ type gamePlayer struct {
 	angle float64
 
 	weapon *playerWeapon
+
+	health int
 }
 
 func NewPlayer() (*gamePlayer, error) {
@@ -32,6 +34,7 @@ func NewPlayer() (*gamePlayer, error) {
 			sprite:   uziSprite,
 			cooldown: 100 * time.Millisecond,
 		},
+		health: 70,
 	}
 	return p, nil
 }

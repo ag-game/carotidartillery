@@ -2,14 +2,18 @@ package main
 
 import (
 	"log"
+	"math/rand"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
 func main() {
+	rand.Seed(time.Now().UnixNano())
+
 	ebiten.SetWindowTitle("Carotid Artillery")
 	ebiten.SetWindowResizable(true)
 	ebiten.SetFullscreen(true)

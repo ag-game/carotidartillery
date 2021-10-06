@@ -3,7 +3,7 @@ module code.rocketnine.space/tslocum/carotidartillery
 go 1.17
 
 require (
-	github.com/hajimehoshi/ebiten/v2 v2.3.0-alpha.0.20211002105934-2fd97767ff1d
+	github.com/hajimehoshi/ebiten/v2 v2.3.0-alpha.0.20211005153847-3f5d1762bb36
 	golang.org/x/image v0.0.0-20210628002857-a66eb6448b8d
 )
 

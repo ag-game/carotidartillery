@@ -77,7 +77,7 @@ func NewLevel() (*Level, error) {
 			case x == l.w-1:
 				t.AddSprite(sandstoneSS.WallRight)
 			case val < 275:
-				t.AddSprite(sandstoneSS.FloorB)
+				//t.AddSprite(sandstoneSS.FloorB)
 			case val < 500:
 				t.AddSprite(sandstoneSS.FloorC)
 			}

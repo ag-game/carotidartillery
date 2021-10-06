@@ -31,11 +31,6 @@ type projectile struct {
 	color color.Color
 }
 
-type creep struct {
-	x, y   float64
-	sprite *ebiten.Image
-}
-
 // game is an isometric demo game.
 type game struct {
 	w, h         int
@@ -144,13 +139,22 @@ func NewGame() (*game, error) {
 
 	vampireImage := ebiten.NewImageFromImage(img)
 
+	addedCreeps := make(map[string]bool)
 	for i := 0; i < 1000; i++ {
 		c := &creep{
 			x:      float64(1 + rand.Intn(64)),
 			y:      float64(1 + rand.Intn(64)),
 			sprite: vampireImage,
 		}
+
+		addedCreep := fmt.Sprintf("%0.0f-%0.0f", c.x, c.y)
+		if addedCreeps[addedCreep] {
+			// Already added a creep here
+			continue
+		}
+
 		g.creeps = append(g.creeps, c)
+		addedCreeps[addedCreep] = true
 	}
 
 	ebiten.SetCursorShape(ebiten.CursorShapeCrosshair)
@@ -163,6 +167,10 @@ func (g *game) Update() error {
 	if ebiten.IsWindowBeingClosed() {
 		g.exit()
 		return nil
+	}
+
+	for _, c := range g.creeps {
+		c.Update()
 	}
 
 	// Update target zoom level.
@@ -229,8 +237,9 @@ func (g *game) Update() error {
 		p.x += math.Cos(p.angle) * p.speed
 		p.y += math.Sin(p.angle) * p.speed
 
-		for _, creep := range g.creeps {
-			dx, dy := p.x-creep.x, p.y-creep.y
+		for _, c := range g.creeps {
+			cx, cy := c.Position()
+			dx, dy := p.x-cx, p.y-cy
 			if dx < 0 {
 				dx *= -1
 			}
@@ -238,8 +247,11 @@ func (g *game) Update() error {
 				dy *= -1
 			}
 			if dx <= bulletHitThreshold && dy <= bulletHitThreshold {
-				creep.x = 1000
-				creep.y = 1000
+				// Kill creep
+				g.addBloodSplatter(cx, cy)
+				c.x = 1000
+				c.y = 1000
+				// Remove projectile
 				g.projectiles = append(g.projectiles[:i-removed], g.projectiles[i-removed+1:]...)
 				removed++
 				break
@@ -284,8 +296,36 @@ func (g *game) screenCoordinatesToLevel(x, y float64) (float64, float64) {
 	return ((x - px) * g.camScale) + float64(g.w/2.0), ((y + py) * g.camScale) + float64(g.h/2.0)
 }
 
+func (g *game) addBloodSplatter(x, y float64) {
+	splatterSprite := ebiten.NewImage(32, 32)
+
+	for y := 8; y < 20; y++ {
+		if rand.Intn(2) != 0 {
+			continue
+		}
+
+		for x := 12; x < 20; x++ {
+			if rand.Intn(5) != 0 {
+				continue
+			}
+
+			splatterSprite.Set(x, y, colornames.Red)
+		}
+	}
+
+	t := g.currentLevel.Tile(int(x), int(y))
+	if t != nil {
+		t.AddSprite(splatterSprite)
+	}
+}
+
 // Draw draws the game on the screen.
 func (g *game) Draw(screen *ebiten.Image) {
+	if g.player.health <= 0 {
+		screen.Fill(colornames.Red)
+		return
+	}
+
 	// Render level.
 	drawn := g.renderLevel(screen)
 
@@ -372,7 +412,20 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 		}
 	}
 
+	biteThreshold := 0.5
 	for _, c := range g.creeps {
+		cx, cy := c.Position()
+		dx, dy := g.player.x-cx, g.player.y-cy
+		if dx < 0 {
+			dx *= -1
+		}
+		if dy < 0 {
+			dy *= -1
+		}
+		if dx <= biteThreshold && dy <= biteThreshold {
+			g.player.health--
+		}
+
 		drawn += g.renderSprite(c.x, c.y, 0, 0, 0, c.sprite, screen)
 	}
 
