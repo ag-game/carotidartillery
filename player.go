@@ -14,6 +14,8 @@ type gamePlayer struct {
 
 	weapon *playerWeapon
 
+	score int
+
 	health int
 }
 
@@ -34,7 +36,7 @@ func NewPlayer() (*gamePlayer, error) {
 			sprite:   uziSprite,
 			cooldown: 100 * time.Millisecond,
 		},
-		health: 7,
+		health: 1,
 	}
 	return p, nil
 }

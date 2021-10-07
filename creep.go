@@ -20,16 +20,19 @@ type gameCreep struct {
 
 	health int
 
+	killScore int
+
 	sync.Mutex
 }
 
 func NewCreep(sprite *ebiten.Image, level *Level) *gameCreep {
 	return &gameCreep{
-		x:      float64(1 + rand.Intn(108)),
-		y:      float64(1 + rand.Intn(108)),
-		sprite: sprite,
-		level:  level,
-		health: 1,
+		x:         float64(1 + rand.Intn(108)),
+		y:         float64(1 + rand.Intn(108)),
+		sprite:    sprite,
+		level:     level,
+		health:    1,
+		killScore: 50,
 	}
 }
 

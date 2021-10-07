@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"image/color"
@@ -9,18 +10,23 @@ import (
 	"os"
 	"time"
 
+	"github.com/hajimehoshi/ebiten/v2/audio/mp3"
+
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
-	"github.com/hajimehoshi/ebiten/v2/audio/mp3"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"golang.org/x/image/colornames"
+	"golang.org/x/text/language"
+	"golang.org/x/text/message"
 )
 
 var spinner = []byte(`-\|/`)
 
 var bulletImage *ebiten.Image
 var flashImage *ebiten.Image
+
+var numberPrinter = message.NewPrinter(language.English)
 
 type projectile struct {
 	x, y  float64
@@ -34,9 +40,11 @@ type game struct {
 	w, h         int
 	currentLevel *Level
 
-	audioPlayerGunshot *audio.Player
-	audioPlayerGib     *audio.Player
-	audioPlayerDie     *audio.Player
+	soundGunshot     []byte
+	soundVampireDie1 []byte
+	soundVampireDie2 []byte
+	soundGib         []byte
+	soundDie         []byte
 
 	player *gamePlayer
 
@@ -58,7 +66,10 @@ type game struct {
 	overlayImg *ebiten.Image
 	op         *ebiten.DrawImageOptions
 
-	godMode bool
+	audioContext *audio.Context
+
+	godMode   bool
+	debugMode bool
 }
 
 const sampleRate = 48000
@@ -75,8 +86,6 @@ func NewGame() (*game, error) {
 		return nil, err
 	}
 
-	audioContext := audio.NewContext(sampleRate)
-
 	g := &game{
 		currentLevel: l,
 		camScale:     2,
@@ -86,6 +95,8 @@ func NewGame() (*game, error) {
 		player:       p,
 		op:           &ebiten.DrawImageOptions{},
 	}
+
+	g.audioContext = audio.NewContext(sampleRate)
 
 	g.player.x = float64(rand.Intn(108))
 	g.player.y = float64(rand.Intn(108))
@@ -118,41 +129,40 @@ func NewGame() (*game, error) {
 
 	flashImage = ebiten.NewImageFromImage(img)
 
-	loadSound := func(p string) (*audio.Player, error) {
-		f, err := assetsFS.Open(p)
+	loadSound := func(p string) ([]byte, error) {
+		b, err := assetsFS.ReadFile(p)
 		if err != nil {
 			return nil, err
 		}
 		defer f.Close()
 
-		gunshotSound, err := mp3.DecodeWithSampleRate(sampleRate, f)
-		if err != nil {
-			return nil, err
-		}
-
-		return audioContext.NewPlayer(gunshotSound)
+		return b, nil
 	}
 
-	g.audioPlayerGunshot, err = loadSound("assets/audio/gunshot.mp3")
-	if err != nil {
-		return nil, err
-	}
-	g.audioPlayerGunshot.SetVolume(0.6)
-
-	g.audioPlayerGib, err = loadSound("assets/audio/gib.mp3")
-	if err != nil {
-		return nil, err
-	}
-	g.audioPlayerGib.SetVolume(1.0)
-
-	g.audioPlayerDie, err = loadSound("assets/audio/die.mp3")
+	g.soundGunshot, err = loadSound("assets/audio/gunshot.mp3")
 	if err != nil {
 		return nil, err
 	}
 
-	// The death sound will have a delay without this.
-	g.audioPlayerDie.SetVolume(0)
-	g.audioPlayerDie.Play()
+	g.soundGib, err = loadSound("assets/audio/gib.mp3")
+	if err != nil {
+		return nil, err
+	}
+
+	g.soundVampireDie1, err = loadSound("assets/audio/vampiredie1.mp3")
+	if err != nil {
+		return nil, err
+	}
+
+	g.soundVampireDie2, err = loadSound("assets/audio/vampiredie2.mp3")
+	if err != nil {
+		return nil, err
+	}
+
+	g.soundDie, err = loadSound("assets/audio/die.mp3")
+	if err != nil {
+		return nil, err
+	}
 
 	f, err = assetsFS.Open("assets/creeps/vampire.png")
 	if err != nil {
@@ -188,12 +198,22 @@ func NewGame() (*game, error) {
 
 	ebiten.SetCursorShape(ebiten.CursorShapeCrosshair)
 
-	// The death sound will have a delay without this.
-	g.audioPlayerDie.Pause()
-	g.audioPlayerDie.Rewind()
-	g.audioPlayerDie.SetVolume(1.6)
-
 	return g, nil
+}
+
+func (g *game) playSound(sound []byte, volume float64) error {
+	stream, err := mp3.DecodeWithSampleRate(sampleRate, bytes.NewReader(sound))
+	if err != nil {
+		return err
+	}
+
+	player, err := g.audioContext.NewPlayer(stream)
+	if err != nil {
+		return err
+	}
+	player.SetVolume(volume)
+	player.Play()
+	return nil
 }
 
 // Update reads current user input and updates the game state.
@@ -289,12 +309,19 @@ func (g *game) Update() error {
 
 				// Killed creep.
 				if c.health == 0 {
+					g.player.score += c.killScore
+
 					g.addBloodSplatter(cx, cy)
 
-					// Play gib sound.
-					g.audioPlayerGib.Pause()
-					g.audioPlayerGib.Rewind()
-					g.audioPlayerGib.Play()
+					// Play vampire die sound.
+					dieSound := g.soundVampireDie1
+					if rand.Intn(2) == 1 {
+						dieSound = g.soundVampireDie2
+					}
+					err := g.playSound(dieSound, 0.25)
+					if err != nil {
+						return err
+					}
 				}
 
 				// Remove projectile
@@ -320,12 +347,16 @@ func (g *game) Update() error {
 		g.player.weapon.lastFire = time.Now()
 
 		// Play gunshot sound.
-		g.audioPlayerGunshot.Pause()
-		g.audioPlayerGunshot.Rewind()
-		g.audioPlayerGunshot.Play()
+		err := g.playSound(g.soundGunshot, 0.4)
+		if err != nil {
+			return err
+		}
 	}
 
 	// TODO debug only
+	if inpututil.IsKeyJustPressed(ebiten.KeyV) {
+		g.debugMode = !g.debugMode
+	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyG) {
 		g.godMode = !g.godMode
 	}
@@ -353,12 +384,21 @@ func (g *game) addBloodSplatter(x, y float64) {
 		if rand.Intn(2) != 0 {
 			continue
 		}
-
 		for x := 12; x < 20; x++ {
 			if rand.Intn(5) != 0 {
 				continue
 			}
-
+			splatterSprite.Set(x, y, colornames.Red)
+		}
+	}
+	for y := 2; y < 26; y++ {
+		if rand.Intn(5) != 0 {
+			continue
+		}
+		for x := 2; x < 26; x++ {
+			if rand.Intn(12) != 0 {
+				continue
+			}
 			splatterSprite.Set(x, y, colornames.Red)
 		}
 	}
@@ -371,8 +411,13 @@ func (g *game) addBloodSplatter(x, y float64) {
 
 // Draw draws the game on the screen.
 func (g *game) Draw(screen *ebiten.Image) {
-	// Game over.
-	if g.player.health <= 0 && !g.godMode {
+	gameOver := g.player.health <= 0 && !g.godMode
+
+	var drawn int
+	if !gameOver {
+		drawn = g.renderLevel(screen)
+	} else {
+		// Game over.
 		screen.Fill(color.RGBA{102, 0, 0, 255})
 
 		if time.Since(g.gameOverTime).Milliseconds()%2000 < 1500 {
@@ -381,19 +426,27 @@ func (g *game) Draw(screen *ebiten.Image) {
 			g.op.GeoM.Reset()
 			g.op.GeoM.Translate(3, 0)
 			g.op.GeoM.Scale(16, 16)
-			g.op.GeoM.Translate(float64(g.w/2)-485, float64(g.h/2)-200)
+			g.op.GeoM.Translate(float64(g.w/2)-495, float64(g.h/2)-200)
 			screen.DrawImage(g.overlayImg, g.op)
 		}
+	}
 
+	scoreLabel := numberPrinter.Sprintf("%d", g.player.score)
+
+	g.overlayImg.Clear()
+	ebitenutil.DebugPrint(g.overlayImg, scoreLabel)
+	g.op.GeoM.Reset()
+	g.op.GeoM.Scale(8, 8)
+	g.op.GeoM.Translate(float64(g.w/2)-float64(24*len(scoreLabel)), float64(g.h-150))
+	screen.DrawImage(g.overlayImg, g.op)
+
+	if !g.debugMode {
 		return
 	}
 
-	// Render level.
-	drawn := g.renderLevel(screen)
-
 	// Print game info.
 	g.overlayImg.Clear()
-	ebitenutil.DebugPrint(g.overlayImg, fmt.Sprintf("FPS  %0.0f\nTPS  %0.0f\nSPR  %d\nSCA  %0.2f\nPOS  %0.0f,%0.0f", ebiten.CurrentFPS(), ebiten.CurrentTPS(), drawn, g.camScale, g.player.x, g.player.y))
+	ebitenutil.DebugPrint(g.overlayImg, fmt.Sprintf("SPR  %d\nTPS  %0.0f\nFPS  %0.0f", drawn, ebiten.CurrentTPS(), ebiten.CurrentFPS()))
 	g.op.GeoM.Reset()
 	g.op.GeoM.Translate(3, 0)
 	g.op.GeoM.Scale(2, 2)
@@ -474,7 +527,7 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 		}
 	}
 
-	biteThreshold := 0.5
+	biteThreshold := 0.75
 	for _, c := range g.creeps {
 		if c.health == 0 {
 			continue
@@ -491,7 +544,11 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 				g.gameOverTime = time.Now()
 
 				// Play die sound.
-				g.audioPlayerDie.Play()
+				err := g.playSound(g.soundDie, 1.6)
+				if err != nil {
+					// TODO return err
+					panic(err)
+				}
 			}
 		}
 
