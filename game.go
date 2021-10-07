@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"log"
 	"math"
 	"math/rand"
 	"os"
+	"path"
+	"runtime/pprof"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2/audio/mp3"
@@ -68,8 +71,9 @@ type game struct {
 
 	audioContext *audio.Context
 
-	godMode   bool
-	debugMode bool
+	godMode    bool
+	debugMode  bool
+	cpuProfile *os.File
 }
 
 const sampleRate = 48000
@@ -216,6 +220,32 @@ func (g *game) playSound(sound []byte, volume float64) error {
 	return nil
 }
 
+func (g *game) hurtCreep(c *gameCreep, damage int) error {
+	if damage == -1 {
+		c.health = 0
+		return nil
+	}
+
+	c.health -= damage
+	if c.health > 0 {
+		return nil
+	}
+
+	// Killed creep.
+	g.player.score += c.killScore
+
+	// Play vampire die sound.
+	dieSound := g.soundVampireDie1
+	if rand.Intn(2) == 1 {
+		dieSound = g.soundVampireDie2
+	}
+	err := g.playSound(dieSound, 0.25)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // Update reads current user input and updates the game state.
 func (g *game) Update() error {
 	if ebiten.IsKeyPressed(ebiten.KeyEscape) || ebiten.IsWindowBeingClosed() {
@@ -304,32 +334,20 @@ func (g *game) Update() error {
 
 			cx, cy := c.Position()
 			dx, dy := deltaXY(p.x, p.y, cx, cy)
-			if dx <= bulletHitThreshold && dy <= bulletHitThreshold {
-				c.health--
-
-				// Killed creep.
-				if c.health == 0 {
-					g.player.score += c.killScore
-
-					g.addBloodSplatter(cx, cy)
-
-					// Play vampire die sound.
-					dieSound := g.soundVampireDie1
-					if rand.Intn(2) == 1 {
-						dieSound = g.soundVampireDie2
-					}
-					err := g.playSound(dieSound, 0.25)
-					if err != nil {
-						return err
-					}
-				}
-
-				// Remove projectile
-				g.projectiles = append(g.projectiles[:i-removed], g.projectiles[i-removed+1:]...)
-				removed++
-
-				break
+			if dx > bulletHitThreshold || dy > bulletHitThreshold {
+				continue
 			}
+
+			err := g.hurtCreep(c, 1)
+			if err != nil {
+				return err
+			}
+
+			// Remove projectile
+			g.projectiles = append(g.projectiles[:i-removed], g.projectiles[i-removed+1:]...)
+			removed++
+
+			break
 		}
 	}
 
@@ -359,6 +377,29 @@ func (g *game) Update() error {
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyG) {
 		g.godMode = !g.godMode
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyP) {
+		if g.cpuProfile == nil {
+			log.Println("CPU profiling started...")
+
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return err
+			}
+			g.cpuProfile, err = os.Create(path.Join(homeDir, "cartillery.prof"))
+			if err != nil {
+				return err
+			}
+			if err := pprof.StartCPUProfile(g.cpuProfile); err != nil {
+				return err
+			}
+		} else {
+			log.Println("Profiling stopped")
+
+			pprof.StopCPUProfile()
+			g.cpuProfile.Close()
+			g.cpuProfile = nil
+		}
 	}
 
 	return nil
@@ -430,6 +471,8 @@ func (g *game) Draw(screen *ebiten.Image) {
 			screen.DrawImage(g.overlayImg, g.op)
 		}
 	}
+
+	// TODO draw hearts for lives
 
 	scoreLabel := numberPrinter.Sprintf("%d", g.player.score)
 
@@ -537,6 +580,16 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 		dx, dy := deltaXY(g.player.x, g.player.y, cx, cy)
 		if dx <= biteThreshold && dy <= biteThreshold {
 			g.player.health--
+
+			err := g.hurtCreep(c, -1)
+			if err != nil {
+				// TODO
+				panic(err)
+			}
+
+			// TODO play ouch sound
+
+			g.addBloodSplatter(g.player.x, g.player.y)
 
 			if g.player.health == 0 && !g.godMode {
 				ebiten.SetCursorShape(ebiten.CursorShapeDefault)

@@ -36,7 +36,7 @@ func NewPlayer() (*gamePlayer, error) {
 			sprite:   uziSprite,
 			cooldown: 100 * time.Millisecond,
 		},
-		health: 1,
+		health: 3,
 	}
 	return p, nil
 }

@@ -8,6 +8,8 @@ import (
 	"syscall"
 	"time"
 
+	_ "net/http/pprof"
+
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
@@ -17,7 +19,7 @@ func main() {
 	ebiten.SetWindowTitle("Carotid Artillery")
 	ebiten.SetWindowResizable(true)
 	ebiten.SetFullscreen(true)
-	ebiten.SetMaxTPS(144)               // TODO allow users to set custom value
+	ebiten.SetMaxTPS(144)
 	ebiten.SetRunnableOnUnfocused(true) // Note - this currently does nothing in ebiten
 	ebiten.SetWindowClosingHandled(true)
 	ebiten.SetFPSMode(ebiten.FPSModeVsyncOn)
