@@ -66,6 +66,10 @@ type game struct {
 	nextSound    map[int]int
 	soundBuffer  map[int][]*audio.Player
 
+	gamepadIDs    []ebiten.GamepadID
+	gamepadIDsBuf []ebiten.GamepadID
+	gamepadMode   bool
+
 	godMode    bool
 	debugMode  bool
 	cpuProfile *os.File
@@ -262,6 +266,18 @@ func (g *game) Update() error {
 		return nil
 	}
 
+	g.gamepadIDsBuf = inpututil.AppendJustConnectedGamepadIDs(g.gamepadIDsBuf[:0])
+	for _, id := range g.gamepadIDsBuf {
+		log.Printf("gamepad connected: id: %d, SDL ID: %s", id, ebiten.GamepadSDLID(id))
+		g.gamepadIDs = append(g.gamepadIDs, id)
+	}
+	for i, id := range g.gamepadIDs {
+		if inpututil.IsGamepadJustDisconnected(id) {
+			log.Printf("gamepad disconnected: id: %d, SDL ID: %s", id, ebiten.GamepadSDLID(id))
+			g.gamepadIDs = append(g.gamepadIDs[:i], g.gamepadIDs[i+1:]...)
+		}
+	}
+
 	biteThreshold := 0.75
 	for _, c := range g.creeps {
 		if c.health == 0 {
@@ -335,32 +351,72 @@ func (g *game) Update() error {
 		g.camScale -= (g.camScale - g.camScaleTo) / div
 	}
 
-	// Pan camera via keyboard.
+	deadZone := 0.1
+
 	pan := 0.05
-	// TODO debug only
-	if ebiten.IsKeyPressed(ebiten.KeyShift) {
-		pan *= 5
+
+	// Pan camera via gamepad.
+	if g.gamepadMode || len(g.gamepadIDs) > 0 {
+		h := ebiten.StandardGamepadAxisValue(g.gamepadIDs[0], ebiten.StandardGamepadAxisLeftStickHorizontal)
+		v := ebiten.StandardGamepadAxisValue(g.gamepadIDs[0], ebiten.StandardGamepadAxisLeftStickVertical)
+		if v < -deadZone || v > deadZone || h < -deadZone || h > deadZone {
+			g.player.x += h * pan
+			g.player.y += v * pan
+
+			if !g.gamepadMode {
+				g.gamepadMode = true
+
+				ebiten.SetCursorMode(ebiten.CursorModeHidden)
+			}
+		}
 	}
 
-	if ebiten.IsKeyPressed(ebiten.KeyLeft) || ebiten.IsKeyPressed(ebiten.KeyA) {
-		g.player.x -= pan
-	}
-	if ebiten.IsKeyPressed(ebiten.KeyRight) || ebiten.IsKeyPressed(ebiten.KeyD) {
-		g.player.x += pan
-	}
-	if ebiten.IsKeyPressed(ebiten.KeyDown) || ebiten.IsKeyPressed(ebiten.KeyS) {
-		g.player.y += pan
-	}
-	if ebiten.IsKeyPressed(ebiten.KeyUp) || ebiten.IsKeyPressed(ebiten.KeyW) {
-		g.player.y -= pan
+	// Pan camera via keyboard.
+	if !g.gamepadMode {
+		// TODO debug only
+		if ebiten.IsKeyPressed(ebiten.KeyShift) {
+			pan *= 5
+		}
+
+		if ebiten.IsKeyPressed(ebiten.KeyLeft) || ebiten.IsKeyPressed(ebiten.KeyA) {
+			g.player.x -= pan
+		}
+		if ebiten.IsKeyPressed(ebiten.KeyRight) || ebiten.IsKeyPressed(ebiten.KeyD) {
+			g.player.x += pan
+		}
+		if ebiten.IsKeyPressed(ebiten.KeyDown) || ebiten.IsKeyPressed(ebiten.KeyS) {
+			g.player.y += pan
+		}
+		if ebiten.IsKeyPressed(ebiten.KeyUp) || ebiten.IsKeyPressed(ebiten.KeyW) {
+			g.player.y -= pan
+		}
 	}
 
 	// Clamp camera position.
 	g.player.x, g.player.y = g.currentLevel.Clamp(g.player.x, g.player.y)
 
-	// Update player angle.
-	cx, cy := ebiten.CursorPosition()
-	g.player.angle = angle(float64(cx), float64(cy), float64(g.w/2), float64(g.h/2))
+	fire := ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft)
+
+	// Update player angle via gamepad.
+	if g.gamepadMode || len(g.gamepadIDs) > 0 {
+		h := ebiten.StandardGamepadAxisValue(g.gamepadIDs[0], ebiten.StandardGamepadAxisRightStickHorizontal)
+		v := ebiten.StandardGamepadAxisValue(g.gamepadIDs[0], ebiten.StandardGamepadAxisRightStickVertical)
+		if v < -deadZone || v > deadZone || h < -deadZone || h > deadZone {
+			g.player.angle = angle(h, v, 0, 0)
+			fire = true
+
+			if !g.gamepadMode {
+				g.gamepadMode = true
+
+				ebiten.SetCursorMode(ebiten.CursorModeHidden)
+			}
+		}
+	}
+	// Update player angle via mouse.
+	if !g.gamepadMode {
+		cx, cy := ebiten.CursorPosition()
+		g.player.angle = angle(float64(cx), float64(cy), float64(g.w/2), float64(g.h/2))
+	}
 
 	// Update boolets.
 	bulletHitThreshold := 0.5
@@ -394,7 +450,7 @@ func (g *game) Update() error {
 	}
 
 	// Fire boolets.
-	if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) && time.Since(g.player.weapon.lastFire) >= g.player.weapon.cooldown {
+	if fire && time.Since(g.player.weapon.lastFire) >= g.player.weapon.cooldown {
 		p := &projectile{
 			x:     g.player.x,
 			y:     g.player.y,
