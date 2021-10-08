@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"image"
 	"image/color"
@@ -12,8 +11,6 @@ import (
 	"path"
 	"runtime/pprof"
 	"time"
-
-	"github.com/hajimehoshi/ebiten/v2/audio/mp3"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
@@ -43,12 +40,6 @@ type game struct {
 	w, h         int
 	currentLevel *Level
 
-	soundGunshot     []byte
-	soundVampireDie1 []byte
-	soundVampireDie2 []byte
-	soundGib         []byte
-	soundDie         []byte
-
 	player *gamePlayer
 
 	gameOverTime time.Time
@@ -70,6 +61,8 @@ type game struct {
 	op         *ebiten.DrawImageOptions
 
 	audioContext *audio.Context
+	nextSound    map[int]int
+	soundBuffer  map[int][]*audio.Player
 
 	godMode    bool
 	debugMode  bool
@@ -98,6 +91,9 @@ func NewGame() (*game, error) {
 		mousePanY:    math.MinInt32,
 		player:       p,
 		op:           &ebiten.DrawImageOptions{},
+
+		soundBuffer: make(map[int][]*audio.Player),
+		nextSound:   make(map[int]int),
 	}
 
 	g.audioContext = audio.NewContext(sampleRate)
@@ -133,39 +129,36 @@ func NewGame() (*game, error) {
 
 	flashImage = ebiten.NewImageFromImage(img)
 
-	loadSound := func(p string) ([]byte, error) {
-		b, err := assetsFS.ReadFile(p)
+	for i := 0; i < 4; i++ {
+		stream, err := loadMP3(g.audioContext, "assets/audio/gunshot.mp3")
 		if err != nil {
 			return nil, err
 		}
-		defer f.Close()
+		g.soundBuffer[SoundGunshot] = append(g.soundBuffer[SoundGunshot], stream)
 
-		return b, nil
-	}
+		stream, err = loadMP3(g.audioContext, "assets/audio/vampiredie1.mp3")
+		if err != nil {
+			return nil, err
+		}
+		g.soundBuffer[SoundVampireDie1] = append(g.soundBuffer[SoundVampireDie1], stream)
 
-	g.soundGunshot, err = loadSound("assets/audio/gunshot.mp3")
-	if err != nil {
-		return nil, err
-	}
+		stream, err = loadMP3(g.audioContext, "assets/audio/vampiredie2.mp3")
+		if err != nil {
+			return nil, err
+		}
+		g.soundBuffer[SoundVampireDie2] = append(g.soundBuffer[SoundVampireDie2], stream)
 
-	g.soundGib, err = loadSound("assets/audio/gib.mp3")
-	if err != nil {
-		return nil, err
-	}
+		stream, err = loadWav(g.audioContext, "assets/audio/hurt.wav")
+		if err != nil {
+			return nil, err
+		}
+		g.soundBuffer[SoundPlayerHurt] = append(g.soundBuffer[SoundPlayerHurt], stream)
 
-	g.soundVampireDie1, err = loadSound("assets/audio/vampiredie1.mp3")
-	if err != nil {
-		return nil, err
-	}
-
-	g.soundVampireDie2, err = loadSound("assets/audio/vampiredie2.mp3")
-	if err != nil {
-		return nil, err
-	}
-
-	g.soundDie, err = loadSound("assets/audio/die.mp3")
-	if err != nil {
-		return nil, err
+		stream, err = loadMP3(g.audioContext, "assets/audio/die.mp3")
+		if err != nil {
+			return nil, err
+		}
+		g.soundBuffer[SoundPlayerDie] = append(g.soundBuffer[SoundPlayerDie], stream)
 	}
 
 	f, err = assetsFS.Open("assets/creeps/vampire.png")
@@ -205,16 +198,14 @@ func NewGame() (*game, error) {
 	return g, nil
 }
 
-func (g *game) playSound(sound []byte, volume float64) error {
-	stream, err := mp3.DecodeWithSampleRate(sampleRate, bytes.NewReader(sound))
-	if err != nil {
-		return err
+func (g *game) playSound(sound int, volume float64) error {
+	player := g.soundBuffer[sound][g.nextSound[sound]]
+	g.nextSound[sound]++
+	if g.nextSound[sound] > 3 {
+		g.nextSound[sound] = 0
 	}
-
-	player, err := g.audioContext.NewPlayer(stream)
-	if err != nil {
-		return err
-	}
+	player.Pause()
+	player.Rewind()
 	player.SetVolume(volume)
 	player.Play()
 	return nil
@@ -235,9 +226,9 @@ func (g *game) hurtCreep(c *gameCreep, damage int) error {
 	g.player.score += c.killScore
 
 	// Play vampire die sound.
-	dieSound := g.soundVampireDie1
+	dieSound := SoundVampireDie1
 	if rand.Intn(2) == 1 {
-		dieSound = g.soundVampireDie2
+		dieSound = SoundVampireDie2
 	}
 	err := g.playSound(dieSound, 0.25)
 	if err != nil {
@@ -365,7 +356,7 @@ func (g *game) Update() error {
 		g.player.weapon.lastFire = time.Now()
 
 		// Play gunshot sound.
-		err := g.playSound(g.soundGunshot, 0.4)
+		err := g.playSound(SoundGunshot, 0.4)
 		if err != nil {
 			return err
 		}
@@ -587,7 +578,11 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 				panic(err)
 			}
 
-			// TODO play ouch sound
+			if g.player.health == 2 {
+				g.playSound(SoundPlayerHurt, 0.4)
+			} else if g.player.health == 1 {
+				g.playSound(SoundPlayerHurt, 0.8)
+			}
 
 			g.addBloodSplatter(g.player.x, g.player.y)
 
@@ -597,7 +592,7 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 				g.gameOverTime = time.Now()
 
 				// Play die sound.
-				err := g.playSound(g.soundDie, 1.6)
+				err := g.playSound(SoundPlayerDie, 1.6)
 				if err != nil {
 					// TODO return err
 					panic(err)
