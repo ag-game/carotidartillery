@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"math/rand"
 	"sync"
 
@@ -16,7 +17,8 @@ type gameCreep struct {
 	tick       int
 	nextAction int
 
-	level *Level
+	level  *Level
+	player *gamePlayer
 
 	health int
 
@@ -25,20 +27,27 @@ type gameCreep struct {
 	sync.Mutex
 }
 
-func NewCreep(sprite *ebiten.Image, level *Level) *gameCreep {
-	return &gameCreep{
-		x:         float64(1 + rand.Intn(108)),
-		y:         float64(1 + rand.Intn(108)),
-		sprite:    sprite,
-		level:     level,
-		health:    1,
-		killScore: 50,
-	}
-}
-
 func (c *gameCreep) doNextAction() {
-	c.moveX = (rand.Float64() - 0.5) / 7
-	c.moveY = (rand.Float64() - 0.5) / 7
+	randMovementA := (rand.Float64() - 0.5) / 7
+	randMovementB := (rand.Float64() - 0.5) / 7
+	if rand.Intn(7) == 0 {
+		// Seek player.
+		c.moveX = c.x - c.player.x
+		if c.moveX < 0 {
+			c.moveX = math.Abs(randMovementA)
+		} else {
+			c.moveX = math.Abs(randMovementA) * -1
+		}
+		c.moveY = c.y - c.player.y
+		if c.moveY < 0 {
+			c.moveY = math.Abs(randMovementB)
+		} else {
+			c.moveY = math.Abs(randMovementB) * -1
+		}
+	} else {
+		c.moveX = randMovementA
+		c.moveY = randMovementB
+	}
 
 	if c.x <= 2 && c.moveX < 0 {
 		c.moveX *= 1
@@ -51,7 +60,19 @@ func (c *gameCreep) doNextAction() {
 		c.moveY *= 1
 	}
 
-	c.nextAction = 400 + rand.Intn(400)
+	c.nextAction = 144 + rand.Intn(720)
+}
+
+func NewCreep(sprite *ebiten.Image, level *Level, player *gamePlayer) *gameCreep {
+	return &gameCreep{
+		x:         float64(1 + rand.Intn(108)),
+		y:         float64(1 + rand.Intn(108)),
+		sprite:    sprite,
+		level:     level,
+		player:    player,
+		health:    1,
+		killScore: 50,
+	}
 }
 
 func (c *gameCreep) Update() {

@@ -57,6 +57,8 @@ type game struct {
 
 	ojasSS *CharacterSpriteSheet
 
+	heartImg *ebiten.Image
+
 	overlayImg *ebiten.Image
 	op         *ebiten.DrawImageOptions
 
@@ -172,9 +174,20 @@ func NewGame() (*game, error) {
 
 	vampireImage := ebiten.NewImageFromImage(img)
 
+	f, err = assetsFS.Open("assets/ui/heart.png")
+	if err != nil {
+		return nil, err
+	}
+	img, _, err = image.Decode(f)
+	if err != nil {
+		return nil, err
+	}
+
+	g.heartImg = ebiten.NewImageFromImage(img)
+
 	addedCreeps := make(map[string]bool)
 	for i := 0; i < 1000; i++ {
-		c := NewCreep(vampireImage, g.currentLevel)
+		c := NewCreep(vampireImage, g.currentLevel, g.player)
 
 		safeSpace := 7.0
 		dx, dy := deltaXY(g.player.x, g.player.y, c.x, c.y)
@@ -249,8 +262,46 @@ func (g *game) Update() error {
 		return nil
 	}
 
+	biteThreshold := 0.75
 	for _, c := range g.creeps {
+		if c.health == 0 {
+			continue
+		}
+
 		c.Update()
+
+		cx, cy := c.Position()
+		dx, dy := deltaXY(g.player.x, g.player.y, cx, cy)
+		if dx <= biteThreshold && dy <= biteThreshold {
+			g.player.health--
+
+			err := g.hurtCreep(c, -1)
+			if err != nil {
+				// TODO
+				panic(err)
+			}
+
+			if g.player.health == 2 {
+				g.playSound(SoundPlayerHurt, 0.4)
+			} else if g.player.health == 1 {
+				g.playSound(SoundPlayerHurt, 0.8)
+			}
+
+			g.addBloodSplatter(g.player.x, g.player.y)
+
+			if g.player.health == 0 && !g.godMode {
+				ebiten.SetCursorShape(ebiten.CursorShapeDefault)
+
+				g.gameOverTime = time.Now()
+
+				// Play die sound.
+				err := g.playSound(SoundPlayerDie, 1.6)
+				if err != nil {
+					// TODO return err
+					panic(err)
+				}
+			}
+		}
 	}
 
 	// Update target zoom level.
@@ -309,7 +360,7 @@ func (g *game) Update() error {
 
 	// Update player angle.
 	cx, cy := ebiten.CursorPosition()
-	g.player.angle = math.Atan2(float64(cy-g.h/2), float64(cx-g.w/2))
+	g.player.angle = angle(float64(cx), float64(cy), float64(g.w/2), float64(g.h/2))
 
 	// Update boolets.
 	bulletHitThreshold := 0.5
@@ -463,7 +514,13 @@ func (g *game) Draw(screen *ebiten.Image) {
 		}
 	}
 
-	// TODO draw hearts for lives
+	heartSpace := 64
+	heartX := (g.w / 2) - ((heartSpace * g.player.health) / 2) + 16
+	for i := 0; i < g.player.health; i++ {
+		g.op.GeoM.Reset()
+		g.op.GeoM.Translate(float64(heartX+(i*heartSpace)), 32)
+		screen.DrawImage(g.heartImg, g.op)
+	}
 
 	scoreLabel := numberPrinter.Sprintf("%d", g.player.score)
 
@@ -561,43 +618,9 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 		}
 	}
 
-	biteThreshold := 0.75
 	for _, c := range g.creeps {
 		if c.health == 0 {
 			continue
-		}
-
-		cx, cy := c.Position()
-		dx, dy := deltaXY(g.player.x, g.player.y, cx, cy)
-		if dx <= biteThreshold && dy <= biteThreshold {
-			g.player.health--
-
-			err := g.hurtCreep(c, -1)
-			if err != nil {
-				// TODO
-				panic(err)
-			}
-
-			if g.player.health == 2 {
-				g.playSound(SoundPlayerHurt, 0.4)
-			} else if g.player.health == 1 {
-				g.playSound(SoundPlayerHurt, 0.8)
-			}
-
-			g.addBloodSplatter(g.player.x, g.player.y)
-
-			if g.player.health == 0 && !g.godMode {
-				ebiten.SetCursorShape(ebiten.CursorShapeDefault)
-
-				g.gameOverTime = time.Now()
-
-				// Play die sound.
-				err := g.playSound(SoundPlayerDie, 1.6)
-				if err != nil {
-					// TODO return err
-					panic(err)
-				}
-			}
 		}
 
 		drawn += g.renderSprite(c.x, c.y, 0, 0, 0, c.sprite, screen)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 	"time"
 )
@@ -100,4 +101,8 @@ func NewLevel() (*Level, error) {
 	}
 
 	return l, nil
+}
+
+func angle(x1, y1, x2, y2 float64) float64 {
+	return math.Atan2(y1-y2, x1-x2)
 }
