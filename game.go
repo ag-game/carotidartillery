@@ -79,7 +79,8 @@ type game struct {
 
 	ojasSS *CharacterSpriteSheet
 
-	heartImg *ebiten.Image
+	heartImg     *ebiten.Image
+	vampireImage *ebiten.Image
 
 	overlayImg *ebiten.Image
 	op         *ebiten.DrawImageOptions
@@ -103,24 +104,12 @@ const sampleRate = 48000
 
 // NewGame returns a new isometric demo game.
 func NewGame() (*game, error) {
-	l, err := NewLevel()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create new level: %s", err)
-	}
-
-	p, err := NewPlayer()
-	if err != nil {
-		return nil, err
-	}
-
 	g := &game{
-		currentLevel: l,
-		camScale:     2,
-		camScaleTo:   2,
-		mousePanX:    math.MinInt32,
-		mousePanY:    math.MinInt32,
-		player:       p,
-		op:           &ebiten.DrawImageOptions{},
+		camScale:   2,
+		camScaleTo: 2,
+		mousePanX:  math.MinInt32,
+		mousePanY:  math.MinInt32,
+		op:         &ebiten.DrawImageOptions{},
 
 		soundBuffer:   make(map[int][]*audio.Player),
 		nextSound:     make(map[int]int),
@@ -129,33 +118,52 @@ func NewGame() (*game, error) {
 
 	g.audioContext = audio.NewContext(sampleRate)
 
-	g.player.x = float64(rand.Intn(108))
-	g.player.y = float64(rand.Intn(108))
+	ebiten.SetCursorShape(ebiten.CursorShapeCrosshair)
 
+	err := g.loadAssets()
+	if err != nil {
+		return nil, err
+	}
+
+	g.player, err = NewPlayer()
+	if err != nil {
+		return nil, err
+	}
+
+	err = g.reset()
+	if err != nil {
+		return nil, err
+	}
+
+	return g, nil
+}
+
+func (g *game) loadAssets() error {
+	var err error
 	// Load SpriteSheets.
 	g.ojasSS, err = LoadCharacterSpriteSheet()
 	if err != nil {
-		return nil, fmt.Errorf("failed to load embedded spritesheet: %s", err)
+		return fmt.Errorf("failed to load embedded spritesheet: %s", err)
 	}
 
 	f, err := assetsFS.Open("assets/weapons/bullet.png")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	img, _, err := image.Decode(f)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	bulletImage = ebiten.NewImageFromImage(img)
 
 	f, err = assetsFS.Open("assets/weapons/flash.png")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	img, _, err = image.Decode(f)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	flashImage = ebiten.NewImageFromImage(img)
@@ -163,81 +171,101 @@ func NewGame() (*game, error) {
 	for i := 0; i < 4; i++ {
 		stream, err := loadMP3(g.audioContext, "assets/audio/gunshot.mp3")
 		if err != nil {
-			return nil, err
+			return err
 		}
 		g.soundBuffer[SoundGunshot] = append(g.soundBuffer[SoundGunshot], stream)
 
 		stream, err = loadMP3(g.audioContext, "assets/audio/vampiredie1.mp3")
 		if err != nil {
-			return nil, err
+			return err
 		}
 		g.soundBuffer[SoundVampireDie1] = append(g.soundBuffer[SoundVampireDie1], stream)
 
 		stream, err = loadMP3(g.audioContext, "assets/audio/vampiredie2.mp3")
 		if err != nil {
-			return nil, err
+			return err
 		}
 		g.soundBuffer[SoundVampireDie2] = append(g.soundBuffer[SoundVampireDie2], stream)
 
 		stream, err = loadWav(g.audioContext, "assets/audio/hurt.wav")
 		if err != nil {
-			return nil, err
+			return err
 		}
 		g.soundBuffer[SoundPlayerHurt] = append(g.soundBuffer[SoundPlayerHurt], stream)
 
 		stream, err = loadMP3(g.audioContext, "assets/audio/die.mp3")
 		if err != nil {
-			return nil, err
+			return err
 		}
 		g.soundBuffer[SoundPlayerDie] = append(g.soundBuffer[SoundPlayerDie], stream)
 	}
 
 	f, err = assetsFS.Open("assets/creeps/vampire.png")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	img, _, err = image.Decode(f)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	vampireImage := ebiten.NewImageFromImage(img)
+	g.vampireImage = ebiten.NewImageFromImage(img)
 
 	f, err = assetsFS.Open("assets/ui/heart.png")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	img, _, err = image.Decode(f)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	g.heartImg = ebiten.NewImageFromImage(img)
+	return nil
+}
 
+func (g *game) reset() error {
+	var err error
+	g.currentLevel, err = NewLevel()
+	if err != nil {
+		return fmt.Errorf("failed to create new level: %s", err)
+	}
+
+	// Reset player score.
+	g.player.score = 0
+
+	// Reset player health.
+	g.player.health = 3
+
+	// Position player.
+	g.player.x = float64(rand.Intn(108))
+	g.player.y = float64(rand.Intn(108))
+
+	// Spawn creeps.
+	g.creeps = make([]*gameCreep, 1000)
 	addedCreeps := make(map[string]bool)
 	for i := 0; i < 1000; i++ {
-		c := NewCreep(vampireImage, g.currentLevel, g.player)
+		c := NewCreep(g.vampireImage, g.currentLevel, g.player)
 
 		safeSpace := 7.0
 		dx, dy := deltaXY(g.player.x, g.player.y, c.x, c.y)
 		if dx <= safeSpace || dy <= safeSpace {
 			// Too close to the spawn point.
+			i--
 			continue
 		}
 
 		addedCreep := fmt.Sprintf("%0.0f-%0.0f", c.x, c.y)
 		if addedCreeps[addedCreep] {
 			// Already added a gameCreep here.
+			i--
 			continue
 		}
 
-		g.creeps = append(g.creeps, c)
+		g.creeps[i] = c
 		addedCreeps[addedCreep] = true
 	}
-
-	ebiten.SetCursorShape(ebiten.CursorShapeCrosshair)
-
-	return g, nil
+	return nil
 }
 
 // Layout is called when the game's layout changes.
@@ -273,6 +301,15 @@ func (g *game) Update() error {
 
 	if g.player.health <= 0 && !g.godMode {
 		// Game over.
+		if ebiten.IsKeyPressed(ebiten.KeyEnter) {
+			err := g.reset()
+			if err != nil {
+				return err
+			}
+
+			g.gameOverTime = time.Time{}
+		}
+		// TODO or button start on gamepad
 		return nil
 	}
 
@@ -583,13 +620,21 @@ func (g *game) Draw(screen *ebiten.Image) {
 
 		if time.Since(g.gameOverTime).Milliseconds()%2000 < 1500 {
 			g.overlayImg.Clear()
-			ebitenutil.DebugPrint(g.overlayImg, "GAME OVER")
+			ebitenutil.DebugPrint(g.overlayImg, "PRESS ENTER OR START TO PLAY AGAIN")
 			g.op.GeoM.Reset()
 			g.op.GeoM.Translate(3, 0)
-			g.op.GeoM.Scale(16, 16)
-			g.op.GeoM.Translate(float64(g.w/2)-495, float64(g.h/2)-200)
+			g.op.GeoM.Scale(4, 4)
+			g.op.GeoM.Translate(float64(g.w/2)-(36*12), 8)
 			screen.DrawImage(g.overlayImg, g.op)
 		}
+
+		g.overlayImg.Clear()
+		ebitenutil.DebugPrint(g.overlayImg, "GAME OVER")
+		g.op.GeoM.Reset()
+		g.op.GeoM.Translate(3, 0)
+		g.op.GeoM.Scale(16, 16)
+		g.op.GeoM.Translate(float64(g.w/2)-495, float64(g.h/2)-200)
+		screen.DrawImage(g.overlayImg, g.op)
 	}
 
 	heartSpace := 64
@@ -610,7 +655,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 	screen.DrawImage(g.overlayImg, g.op)
 
 	if g.godMode {
-		// Print game info.
+		// Draw God mode indicator.
 		g.overlayImg.Clear()
 		ebitenutil.DebugPrint(g.overlayImg, "GOD")
 		g.op.GeoM.Reset()
