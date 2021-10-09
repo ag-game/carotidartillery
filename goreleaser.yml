@@ -1,0 +1,30 @@
+project_name: carotidartillery
+
+builds:
+  -
+    id: carotidartillery
+#    ldflags:
+#      - -s -w -X code.rocketnine.space/tslocum/carotidartillery/main.Version={{.Version}}
+    goos:
+      - linux
+      - windows
+#      - darwin
+#      - freebsd
+    goarch:
+      - amd64
+archives:
+  -
+    id: carotidartillery
+    builds:
+      - carotidartillery
+    replacements:
+      386: i386
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - ./*.md
+#      - CHANGELOG
+      - LICENSE
+checksum:
+  name_template: 'checksums.txt'

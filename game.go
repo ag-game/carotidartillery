@@ -28,6 +28,26 @@ var flashImage *ebiten.Image
 
 var numberPrinter = message.NewPrinter(language.English)
 
+var startButtons = []ebiten.StandardGamepadButton{
+	ebiten.StandardGamepadButtonRightBottom,
+	ebiten.StandardGamepadButtonRightRight,
+	ebiten.StandardGamepadButtonRightLeft,
+	ebiten.StandardGamepadButtonRightTop,
+	ebiten.StandardGamepadButtonFrontTopLeft,
+	ebiten.StandardGamepadButtonFrontTopRight,
+	ebiten.StandardGamepadButtonFrontBottomLeft,
+	ebiten.StandardGamepadButtonFrontBottomRight,
+	ebiten.StandardGamepadButtonCenterLeft,
+	ebiten.StandardGamepadButtonCenterRight,
+	ebiten.StandardGamepadButtonLeftStick,
+	ebiten.StandardGamepadButtonRightStick,
+	ebiten.StandardGamepadButtonLeftBottom,
+	ebiten.StandardGamepadButtonLeftRight,
+	ebiten.StandardGamepadButtonLeftLeft,
+	ebiten.StandardGamepadButtonLeftTop,
+	ebiten.StandardGamepadButtonCenterCenter,
+}
+
 type projectile struct {
 	x, y  float64
 	angle float64
@@ -41,6 +61,8 @@ type game struct {
 	currentLevel *Level
 
 	player *gamePlayer
+
+	gameStartTime time.Time
 
 	gameOverTime time.Time
 
@@ -68,7 +90,9 @@ type game struct {
 
 	gamepadIDs    []ebiten.GamepadID
 	gamepadIDsBuf []ebiten.GamepadID
-	gamepadMode   bool
+	activeGamepad ebiten.GamepadID
+
+	initialButtonReleased bool
 
 	godMode    bool
 	debugMode  bool
@@ -98,8 +122,9 @@ func NewGame() (*game, error) {
 		player:       p,
 		op:           &ebiten.DrawImageOptions{},
 
-		soundBuffer: make(map[int][]*audio.Player),
-		nextSound:   make(map[int]int),
+		soundBuffer:   make(map[int][]*audio.Player),
+		nextSound:     make(map[int]int),
+		activeGamepad: -1,
 	}
 
 	g.audioContext = audio.NewContext(sampleRate)
@@ -215,47 +240,32 @@ func NewGame() (*game, error) {
 	return g, nil
 }
 
-func (g *game) playSound(sound int, volume float64) error {
-	player := g.soundBuffer[sound][g.nextSound[sound]]
-	g.nextSound[sound]++
-	if g.nextSound[sound] > 3 {
-		g.nextSound[sound] = 0
-	}
-	player.Pause()
-	player.Rewind()
-	player.SetVolume(volume)
-	player.Play()
-	return nil
-}
+// Layout is called when the game's layout changes.
+func (g *game) Layout(outsideWidth, outsideHeight int) (int, int) {
+	s := ebiten.DeviceScaleFactor()
+	w, h := int(s*float64(outsideWidth)), int(s*float64(outsideHeight))
+	if w != g.w || h != g.h {
+		g.w, g.h = w, h
 
-func (g *game) hurtCreep(c *gameCreep, damage int) error {
-	if damage == -1 {
-		c.health = 0
-		return nil
+		debugBox := image.NewRGBA(image.Rect(0, 0, g.w, 200))
+		g.overlayImg = ebiten.NewImageFromImage(debugBox)
 	}
-
-	c.health -= damage
-	if c.health > 0 {
-		return nil
+	if g.player.weapon.spriteFlipped == nil {
+		op := &ebiten.DrawImageOptions{}
+		op.GeoM.Scale(-1, 1)
+		op.GeoM.Translate(32, 0)
+		spriteFlipped := ebiten.NewImageFromImage(g.player.weapon.sprite)
+		spriteFlipped.Clear()
+		spriteFlipped.DrawImage(g.player.weapon.sprite, op)
+		g.player.weapon.spriteFlipped = spriteFlipped
 	}
-
-	// Killed creep.
-	g.player.score += c.killScore
-
-	// Play vampire die sound.
-	dieSound := SoundVampireDie1
-	if rand.Intn(2) == 1 {
-		dieSound = SoundVampireDie2
-	}
-	err := g.playSound(dieSound, 0.25)
-	if err != nil {
-		return err
-	}
-	return nil
+	return g.w, g.h
 }
 
 // Update reads current user input and updates the game state.
 func (g *game) Update() error {
+	gamepadDeadZone := 0.1
+
 	if ebiten.IsKeyPressed(ebiten.KeyEscape) || ebiten.IsWindowBeingClosed() {
 		g.exit()
 		return nil
@@ -268,14 +278,34 @@ func (g *game) Update() error {
 
 	g.gamepadIDsBuf = inpututil.AppendJustConnectedGamepadIDs(g.gamepadIDsBuf[:0])
 	for _, id := range g.gamepadIDsBuf {
-		log.Printf("gamepad connected: id: %d, SDL ID: %s", id, ebiten.GamepadSDLID(id))
+		log.Printf("gamepad connected: %d", id)
 		g.gamepadIDs = append(g.gamepadIDs, id)
 	}
 	for i, id := range g.gamepadIDs {
 		if inpututil.IsGamepadJustDisconnected(id) {
-			log.Printf("gamepad disconnected: id: %d, SDL ID: %s", id, ebiten.GamepadSDLID(id))
+			log.Printf("gamepad disconnected: %d", id)
 			g.gamepadIDs = append(g.gamepadIDs[:i], g.gamepadIDs[i+1:]...)
 		}
+
+		if g.activeGamepad == -1 {
+			for _, button := range startButtons {
+				if ebiten.IsStandardGamepadButtonPressed(id, button) {
+					log.Printf("gamepad activated: %d", id)
+					g.activeGamepad = id
+					ebiten.SetCursorMode(ebiten.CursorModeHidden)
+					break
+				}
+			}
+		}
+	}
+
+	if g.gameStartTime.IsZero() {
+		var pressedKeys []ebiten.Key
+		pressedKeys = inpututil.AppendPressedKeys(pressedKeys)
+		if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) || g.activeGamepad != -1 || len(pressedKeys) > 0 {
+			g.gameStartTime = time.Now()
+		}
+		return nil
 	}
 
 	biteThreshold := 0.75
@@ -351,28 +381,17 @@ func (g *game) Update() error {
 		g.camScale -= (g.camScale - g.camScaleTo) / div
 	}
 
-	deadZone := 0.1
-
 	pan := 0.05
 
-	// Pan camera via gamepad.
-	if g.gamepadMode || len(g.gamepadIDs) > 0 {
-		h := ebiten.StandardGamepadAxisValue(g.gamepadIDs[0], ebiten.StandardGamepadAxisLeftStickHorizontal)
-		v := ebiten.StandardGamepadAxisValue(g.gamepadIDs[0], ebiten.StandardGamepadAxisLeftStickVertical)
-		if v < -deadZone || v > deadZone || h < -deadZone || h > deadZone {
+	// Pan camera.
+	if g.activeGamepad != -1 {
+		h := ebiten.StandardGamepadAxisValue(g.activeGamepad, ebiten.StandardGamepadAxisLeftStickHorizontal)
+		v := ebiten.StandardGamepadAxisValue(g.activeGamepad, ebiten.StandardGamepadAxisLeftStickVertical)
+		if v < -gamepadDeadZone || v > gamepadDeadZone || h < -gamepadDeadZone || h > gamepadDeadZone {
 			g.player.x += h * pan
 			g.player.y += v * pan
-
-			if !g.gamepadMode {
-				g.gamepadMode = true
-
-				ebiten.SetCursorMode(ebiten.CursorModeHidden)
-			}
 		}
-	}
-
-	// Pan camera via keyboard.
-	if !g.gamepadMode {
+	} else {
 		// TODO debug only
 		if ebiten.IsKeyPressed(ebiten.KeyShift) {
 			pan *= 5
@@ -397,25 +416,25 @@ func (g *game) Update() error {
 
 	fire := ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft)
 
-	// Update player angle via gamepad.
-	if g.gamepadMode || len(g.gamepadIDs) > 0 {
-		h := ebiten.StandardGamepadAxisValue(g.gamepadIDs[0], ebiten.StandardGamepadAxisRightStickHorizontal)
-		v := ebiten.StandardGamepadAxisValue(g.gamepadIDs[0], ebiten.StandardGamepadAxisRightStickVertical)
-		if v < -deadZone || v > deadZone || h < -deadZone || h > deadZone {
+	// Update player angle.
+	if g.activeGamepad != -1 {
+		h := ebiten.StandardGamepadAxisValue(g.activeGamepad, ebiten.StandardGamepadAxisRightStickHorizontal)
+		v := ebiten.StandardGamepadAxisValue(g.activeGamepad, ebiten.StandardGamepadAxisRightStickVertical)
+		if v < -gamepadDeadZone || v > gamepadDeadZone || h < -gamepadDeadZone || h > gamepadDeadZone {
 			g.player.angle = angle(h, v, 0, 0)
 			fire = true
-
-			if !g.gamepadMode {
-				g.gamepadMode = true
-
-				ebiten.SetCursorMode(ebiten.CursorModeHidden)
-			}
 		}
-	}
-	// Update player angle via mouse.
-	if !g.gamepadMode {
+	} else {
 		cx, cy := ebiten.CursorPosition()
 		g.player.angle = angle(float64(cx), float64(cy), float64(g.w/2), float64(g.h/2))
+	}
+
+	if !g.initialButtonReleased {
+		if fire {
+			fire = false
+		} else {
+			g.initialButtonReleased = true
+		}
 	}
 
 	// Update boolets.
@@ -503,53 +522,56 @@ func (g *game) Update() error {
 	return nil
 }
 
-func (g *game) levelCoordinatesToScreen(x, y float64) (float64, float64) {
-	px, py := g.tilePosition(g.player.x, g.player.y)
-	py *= -1
-	return ((x - px) * g.camScale) + float64(g.w/2.0), ((y + py) * g.camScale) + float64(g.h/2.0)
-}
-
-func (g *game) screenCoordinatesToLevel(x, y float64) (float64, float64) {
-	// TODO reverse
-	px, py := g.tilePosition(g.player.x, g.player.y)
-	py *= -1
-	return ((x - px) * g.camScale) + float64(g.w/2.0), ((y + py) * g.camScale) + float64(g.h/2.0)
-}
-
-func (g *game) addBloodSplatter(x, y float64) {
-	splatterSprite := ebiten.NewImage(32, 32)
-
-	for y := 8; y < 20; y++ {
-		if rand.Intn(2) != 0 {
-			continue
-		}
-		for x := 12; x < 20; x++ {
-			if rand.Intn(5) != 0 {
-				continue
-			}
-			splatterSprite.Set(x, y, colornames.Red)
-		}
-	}
-	for y := 2; y < 26; y++ {
-		if rand.Intn(5) != 0 {
-			continue
-		}
-		for x := 2; x < 26; x++ {
-			if rand.Intn(12) != 0 {
-				continue
-			}
-			splatterSprite.Set(x, y, colornames.Red)
-		}
-	}
-
-	t := g.currentLevel.Tile(int(x), int(y))
-	if t != nil {
-		t.AddSprite(splatterSprite)
-	}
-}
-
 // Draw draws the game on the screen.
 func (g *game) Draw(screen *ebiten.Image) {
+	if g.gameStartTime.IsZero() {
+		screen.Fill(color.RGBA{102, 0, 0, 255})
+
+		g.overlayImg.Clear()
+		ebitenutil.DebugPrint(g.overlayImg, "CAROTID")
+		g.op.GeoM.Reset()
+		g.op.GeoM.Translate(3, 0)
+		g.op.GeoM.Scale(16, 16)
+		g.op.GeoM.Translate(float64(g.w/2)-(7*54), float64(g.h/2)-250)
+		screen.DrawImage(g.overlayImg, g.op)
+
+		g.overlayImg.Clear()
+		ebitenutil.DebugPrint(g.overlayImg, "ARTILLERY")
+		g.op.GeoM.Reset()
+		g.op.GeoM.Translate(3, 0)
+		g.op.GeoM.Scale(16, 16)
+		g.op.GeoM.Translate(float64(g.w/2)-(9*54), float64(g.h/2))
+		screen.DrawImage(g.overlayImg, g.op)
+
+		g.overlayImg.Clear()
+		ebitenutil.DebugPrint(g.overlayImg, "KEYBOARD WASD")
+		g.op.GeoM.Reset()
+		g.op.GeoM.Translate(3, 0)
+		g.op.GeoM.Scale(4, 4)
+		g.op.GeoM.Translate(float64(g.w/2)-(13*12), float64(g.h-210))
+		screen.DrawImage(g.overlayImg, g.op)
+
+		g.overlayImg.Clear()
+		ebitenutil.DebugPrint(g.overlayImg, "GAMEPAD RECOMMENDED")
+		g.op.GeoM.Reset()
+		g.op.GeoM.Translate(3, 0)
+		g.op.GeoM.Scale(4, 4)
+		g.op.GeoM.Translate(float64(g.w/2)-(19*12), float64(g.h-145))
+		screen.DrawImage(g.overlayImg, g.op)
+
+		if time.Now().UnixMilli()%2000 < 1500 {
+			g.overlayImg.Clear()
+			ebitenutil.DebugPrint(g.overlayImg, "PRESS ANY KEY OR BUTTON TO START")
+			g.op.GeoM.Reset()
+			g.op.GeoM.Translate(3, 0)
+			g.op.GeoM.Scale(4, 4)
+			g.op.GeoM.Translate(float64(g.w/2)-(32*12), float64(g.h-80))
+			screen.DrawImage(g.overlayImg, g.op)
+		}
+
+		return
+	}
+
 	gameOver := g.player.health <= 0 && !g.godMode
 
 	var drawn int
@@ -587,6 +609,17 @@ func (g *game) Draw(screen *ebiten.Image) {
 	g.op.GeoM.Translate(float64(g.w/2)-float64(24*len(scoreLabel)), float64(g.h-150))
 	screen.DrawImage(g.overlayImg, g.op)
 
+	if g.godMode {
+		// Print game info.
+		g.overlayImg.Clear()
+		ebitenutil.DebugPrint(g.overlayImg, "GOD")
+		g.op.GeoM.Reset()
+		g.op.GeoM.Translate(3, 0)
+		g.op.GeoM.Scale(2, 2)
+		g.op.GeoM.Translate(float64(g.w/2)-16, float64(g.h-40))
+		screen.DrawImage(g.overlayImg, g.op)
+	}
+
 	if !g.debugMode {
 		return
 	}
@@ -598,28 +631,6 @@ func (g *game) Draw(screen *ebiten.Image) {
 	g.op.GeoM.Translate(3, 0)
 	g.op.GeoM.Scale(2, 2)
 	screen.DrawImage(g.overlayImg, g.op)
-}
-
-// Layout is called when the game's layout changes.
-func (g *game) Layout(outsideWidth, outsideHeight int) (int, int) {
-	s := ebiten.DeviceScaleFactor()
-	w, h := int(s*float64(outsideWidth)), int(s*float64(outsideHeight))
-	if w != g.w || h != g.h {
-		g.w, g.h = w, h
-
-		debugBox := image.NewRGBA(image.Rect(0, 0, g.w, 200))
-		g.overlayImg = ebiten.NewImageFromImage(debugBox)
-	}
-	if g.player.weapon.spriteFlipped == nil {
-		op := &ebiten.DrawImageOptions{}
-		op.GeoM.Scale(-1, 1)
-		op.GeoM.Translate(32, 0)
-		spriteFlipped := ebiten.NewImageFromImage(g.player.weapon.sprite)
-		spriteFlipped.Clear()
-		spriteFlipped.DrawImage(g.player.weapon.sprite, op)
-		g.player.weapon.spriteFlipped = spriteFlipped
-	}
-	return g.w, g.h
 }
 
 // tilePosition transforms X,Y coordinates into tile positions.
@@ -707,6 +718,87 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 	}
 
 	return drawn
+}
+
+func (g *game) playSound(sound int, volume float64) error {
+	player := g.soundBuffer[sound][g.nextSound[sound]]
+	g.nextSound[sound]++
+	if g.nextSound[sound] > 3 {
+		g.nextSound[sound] = 0
+	}
+	player.Pause()
+	player.Rewind()
+	player.SetVolume(volume)
+	player.Play()
+	return nil
+}
+
+func (g *game) hurtCreep(c *gameCreep, damage int) error {
+	if damage == -1 {
+		c.health = 0
+		return nil
+	}
+
+	c.health -= damage
+	if c.health > 0 {
+		return nil
+	}
+
+	// Killed creep.
+	g.player.score += c.killScore
+
+	// Play vampire die sound.
+	dieSound := SoundVampireDie1
+	if rand.Intn(2) == 1 {
+		dieSound = SoundVampireDie2
+	}
+	// TODO set volume to distance
+	err := g.playSound(dieSound, 0.15)
+	if err != nil {
+		return err
+	}
+
+	g.addBloodSplatter(c.x, c.y)
+
+	return nil
+}
+
+func (g *game) levelCoordinatesToScreen(x, y float64) (float64, float64) {
+	px, py := g.tilePosition(g.player.x, g.player.y)
+	py *= -1
+	return ((x - px) * g.camScale) + float64(g.w/2.0), ((y + py) * g.camScale) + float64(g.h/2.0)
+}
+
+func (g *game) addBloodSplatter(x, y float64) {
+	splatterSprite := ebiten.NewImage(32, 32)
+
+	for y := 8; y < 20; y++ {
+		if rand.Intn(2) != 0 {
+			continue
+		}
+		for x := 12; x < 20; x++ {
+			if rand.Intn(5) != 0 {
+				continue
+			}
+			splatterSprite.Set(x, y, colornames.Red)
+		}
+	}
+	for y := 2; y < 26; y++ {
+		if rand.Intn(5) != 0 {
+			continue
+		}
+		for x := 2; x < 26; x++ {
+			if rand.Intn(12) != 0 {
+				continue
+			}
+			splatterSprite.Set(x, y, colornames.Red)
+		}
+	}
+
+	t := g.currentLevel.Tile(int(x), int(y))
+	if t != nil {
+		t.AddSprite(splatterSprite)
+	}
 }
 
 func (g *game) exit() {
