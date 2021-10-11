@@ -10,6 +10,7 @@ const (
 	SoundGunshot = iota
 	SoundVampireDie1
 	SoundVampireDie2
+	SoundBat
 	SoundPlayerHurt
 	SoundPlayerDie
 	SoundGib

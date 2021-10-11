@@ -36,8 +36,6 @@ type gameCreep struct {
 
 	health int
 
-	killScore int
-
 	sync.Mutex
 }
 
@@ -50,9 +48,14 @@ func (c *gameCreep) queueNextAction() {
 }
 
 func (c *gameCreep) doNextAction() {
+	c.queueNextAction()
+
 	randMovementA := (rand.Float64() - 0.5) / 7
 	randMovementB := (rand.Float64() - 0.5) / 7
-	if rand.Intn(7) == 0 {
+
+	dx, dy := deltaXY(c.x, c.y, c.player.x, c.player.y)
+	seekDistance := 7.0
+	if (dx < seekDistance && dy < seekDistance) || rand.Intn(7) == 0 {
 		// Seek player.
 		c.moveX = c.x - c.player.x
 		if c.moveX < 0 {
@@ -66,6 +69,8 @@ func (c *gameCreep) doNextAction() {
 		} else {
 			c.moveY = math.Abs(randMovementB) * -1
 		}
+
+		c.nextAction *= 2
 	} else {
 		c.moveX = randMovementA
 		c.moveY = randMovementB
@@ -81,8 +86,6 @@ func (c *gameCreep) doNextAction() {
 	} else if c.y >= float64(c.level.h-3) && c.moveY < 0 {
 		c.moveY *= 1
 	}
-
-	c.queueNextAction()
 }
 
 func (c *gameCreep) Update() {
@@ -111,4 +114,17 @@ func (c *gameCreep) Position() (float64, float64) {
 	c.Lock()
 	defer c.Unlock()
 	return c.x, c.y
+}
+
+func (c *gameCreep) killScore() int {
+	switch c.creepType {
+	case TypeVampire:
+		return 50
+	case TypeBat:
+		return 125
+	case TypeGhost:
+		return 75
+	default:
+		return 0
+	}
 }

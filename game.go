@@ -28,6 +28,15 @@ var flashImage *ebiten.Image
 
 var numberPrinter = message.NewPrinter(language.English)
 
+// TODO move into switch in playSound
+const (
+	gunshotVolume    = 0.2
+	vampireDieVolume = 0.15
+	batDieVolume     = 1.5
+	playerHurtVolume = 0.4
+	playerDieVolume  = 1.6
+)
+
 var startButtons = []ebiten.StandardGamepadButton{
 	ebiten.StandardGamepadButtonRightBottom,
 	ebiten.StandardGamepadButtonRightRight,
@@ -88,8 +97,10 @@ type game struct {
 	op         *ebiten.DrawImageOptions
 
 	audioContext *audio.Context
-	nextSound    map[int]int
-	soundBuffer  map[int][]*audio.Player
+	nextSound    []int
+	soundBuffer  [][]*audio.Player
+
+	lastBatSound time.Time
 
 	gamepadIDs    []ebiten.GamepadID
 	gamepadIDsBuf []ebiten.GamepadID
@@ -102,7 +113,7 @@ type game struct {
 	cpuProfile *os.File
 }
 
-const sampleRate = 48000
+const sampleRate = 44100
 
 // NewGame returns a new isometric demo game.
 func NewGame() (*game, error) {
@@ -113,8 +124,8 @@ func NewGame() (*game, error) {
 		mousePanY:  math.MinInt32,
 		op:         &ebiten.DrawImageOptions{},
 
-		soundBuffer:   make(map[int][]*audio.Player),
-		nextSound:     make(map[int]int),
+		soundBuffer:   make([][]*audio.Player, 6),
+		nextSound:     make([]int, 6),
 		activeGamepad: -1,
 	}
 
@@ -175,36 +186,49 @@ func (g *game) loadAssets() error {
 
 	flashImage = ebiten.NewImageFromImage(img)
 
+	g.soundBuffer[SoundGunshot] = make([]*audio.Player, 4)
+	g.soundBuffer[SoundVampireDie1] = make([]*audio.Player, 4)
+	g.soundBuffer[SoundVampireDie2] = make([]*audio.Player, 4)
+	g.soundBuffer[SoundBat] = make([]*audio.Player, 4)
+	g.soundBuffer[SoundPlayerHurt] = make([]*audio.Player, 4)
+	g.soundBuffer[SoundPlayerDie] = make([]*audio.Player, 4)
+
 	for i := 0; i < 4; i++ {
 		stream, err := loadMP3(g.audioContext, "assets/audio/gunshot.mp3")
 		if err != nil {
 			return err
 		}
-		g.soundBuffer[SoundGunshot] = append(g.soundBuffer[SoundGunshot], stream)
+		g.soundBuffer[SoundGunshot][i] = stream
 
 		stream, err = loadMP3(g.audioContext, "assets/audio/vampiredie1.mp3")
 		if err != nil {
 			return err
 		}
-		g.soundBuffer[SoundVampireDie1] = append(g.soundBuffer[SoundVampireDie1], stream)
+		g.soundBuffer[SoundVampireDie1][i] = stream
 
 		stream, err = loadMP3(g.audioContext, "assets/audio/vampiredie2.mp3")
 		if err != nil {
 			return err
 		}
-		g.soundBuffer[SoundVampireDie2] = append(g.soundBuffer[SoundVampireDie2], stream)
+		g.soundBuffer[SoundVampireDie2][i] = stream
 
-		stream, err = loadWav(g.audioContext, "assets/audio/hurt.wav")
+		stream, err = loadMP3(g.audioContext, "assets/audio/bat.mp3")
 		if err != nil {
 			return err
 		}
-		g.soundBuffer[SoundPlayerHurt] = append(g.soundBuffer[SoundPlayerHurt], stream)
+		g.soundBuffer[SoundBat][i] = stream
 
-		stream, err = loadMP3(g.audioContext, "assets/audio/die.mp3")
+		stream, err = loadMP3(g.audioContext, "assets/audio/playerhurt.mp3")
 		if err != nil {
 			return err
 		}
-		g.soundBuffer[SoundPlayerDie] = append(g.soundBuffer[SoundPlayerDie], stream)
+		g.soundBuffer[SoundPlayerHurt][i] = stream
+
+		stream, err = loadMP3(g.audioContext, "assets/audio/playerdie.mp3")
+		if err != nil {
+			return err
+		}
+		g.soundBuffer[SoundPlayerDie][i] = stream
 	}
 
 	f, err = assetsFS.Open("assets/creeps/vampire.png")
@@ -254,7 +278,6 @@ func (g *game) newCreep(creepType int) *gameCreep {
 		level:     g.currentLevel,
 		player:    g.player,
 		health:    1,
-		killScore: 50,
 	}
 }
 
@@ -274,6 +297,9 @@ func (g *game) reset() error {
 	// Position player.
 	g.player.x = float64(rand.Intn(108))
 	g.player.y = float64(rand.Intn(108))
+
+	// Remove projectiles.
+	g.projectiles = nil
 
 	// Spawn creeps.
 	g.creeps = make([]*gameCreep, 1000)
@@ -339,7 +365,7 @@ func (g *game) Update() error {
 
 	if g.player.health <= 0 && !g.godMode {
 		// Game over.
-		if ebiten.IsKeyPressed(ebiten.KeyEnter) {
+		if ebiten.IsKeyPressed(ebiten.KeyEnter) || (g.activeGamepad != -1 && ebiten.IsStandardGamepadButtonPressed(g.activeGamepad, ebiten.StandardGamepadButtonCenterRight)) {
 			err := g.reset()
 			if err != nil {
 				return err
@@ -347,7 +373,6 @@ func (g *game) Update() error {
 
 			g.gameOverTime = time.Time{}
 		}
-		// TODO or button start on gamepad
 		return nil
 	}
 
@@ -403,9 +428,9 @@ func (g *game) Update() error {
 			}
 
 			if g.player.health == 2 {
-				g.playSound(SoundPlayerHurt, 0.4)
+				g.playSound(SoundPlayerHurt, playerHurtVolume/2)
 			} else if g.player.health == 1 {
-				g.playSound(SoundPlayerHurt, 0.8)
+				g.playSound(SoundPlayerHurt, playerHurtVolume)
 			}
 
 			g.addBloodSplatter(g.player.x, g.player.y)
@@ -416,12 +441,15 @@ func (g *game) Update() error {
 				g.gameOverTime = time.Now()
 
 				// Play die sound.
-				err := g.playSound(SoundPlayerDie, 1.6)
+				err := g.playSound(SoundPlayerDie, playerDieVolume)
 				if err != nil {
 					// TODO return err
 					panic(err)
 				}
 			}
+		} else if c.creepType == TypeBat && (dx <= 12 && dy <= 7) && rand.Intn(166) == 6 && time.Since(g.lastBatSound) >= 100*time.Millisecond {
+			g.playSound(SoundBat, batDieVolume)
+			g.lastBatSound = time.Now()
 		}
 	}
 
@@ -557,7 +585,7 @@ func (g *game) Update() error {
 		g.player.weapon.lastFire = time.Now()
 
 		// Play gunshot sound.
-		err := g.playSound(SoundGunshot, 0.4)
+		err := g.playSound(SoundGunshot, gunshotVolume)
 		if err != nil {
 			return err
 		}
@@ -835,15 +863,43 @@ func (g *game) hurtCreep(c *gameCreep, damage int) error {
 	}
 
 	// Killed creep.
-	g.player.score += c.killScore
+	g.player.score += c.killScore()
 
 	// Play vampire die sound.
-	dieSound := SoundVampireDie1
+
+	var volume float64
+	var dieSound int
+
+	dieSound = SoundVampireDie1
 	if rand.Intn(2) == 1 {
 		dieSound = SoundVampireDie2
 	}
-	// TODO set volume to distance
-	err := g.playSound(dieSound, 0.15)
+	volume = vampireDieVolume
+	/*
+		if c.creepType == TypeBat {
+			dieSound = SoundBat
+			volume = batDieVolume
+		} else {
+			dieSound = SoundVampireDie1
+			if rand.Intn(2) == 1 {
+				dieSound = SoundVampireDie2
+			}
+			volume = vampireDieVolume
+		}
+	*/
+
+	dx, dy := deltaXY(g.player.x, g.player.y, c.x, c.y)
+	distance := dx
+	if dy > dx {
+		distance = dy
+	}
+	if distance > 9 {
+		volume *= 0.7
+	} else if distance > 6 {
+		volume *= 0.85
+	}
+
+	err := g.playSound(dieSound, volume)
 	if err != nil {
 		return err
 	}
