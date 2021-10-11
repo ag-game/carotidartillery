@@ -77,6 +77,8 @@ type game struct {
 
 	projectiles []*projectile
 
+	batSS *BatSpriteSheet
+
 	ojasSS *CharacterSpriteSheet
 
 	heartImg     *ebiten.Image
@@ -142,6 +144,11 @@ func (g *game) loadAssets() error {
 	var err error
 	// Load SpriteSheets.
 	g.ojasSS, err = LoadCharacterSpriteSheet()
+	if err != nil {
+		return fmt.Errorf("failed to load embedded spritesheet: %s", err)
+	}
+
+	g.batSS, err = LoadBatSpriteSheet()
 	if err != nil {
 		return fmt.Errorf("failed to load embedded spritesheet: %s", err)
 	}
@@ -224,6 +231,33 @@ func (g *game) loadAssets() error {
 	return nil
 }
 
+func (g *game) newCreep(creepType int) *gameCreep {
+	sprites := []*ebiten.Image{g.vampireImage}
+	if creepType == TypeBat {
+		sprites = []*ebiten.Image{
+			g.batSS.Frame1,
+			g.batSS.Frame2,
+			g.batSS.Frame3,
+			g.batSS.Frame4,
+			g.batSS.Frame5,
+			g.batSS.Frame6,
+			g.batSS.Frame7,
+		}
+	}
+
+	return &gameCreep{
+		creepType: creepType,
+		x:         float64(1 + rand.Intn(108)),
+		y:         float64(1 + rand.Intn(108)),
+		sprites:   sprites,
+		frames:    len(sprites),
+		level:     g.currentLevel,
+		player:    g.player,
+		health:    1,
+		killScore: 50,
+	}
+}
+
 func (g *game) reset() error {
 	var err error
 	g.currentLevel, err = NewLevel()
@@ -245,7 +279,11 @@ func (g *game) reset() error {
 	g.creeps = make([]*gameCreep, 1000)
 	addedCreeps := make(map[string]bool)
 	for i := 0; i < 1000; i++ {
-		c := NewCreep(g.vampireImage, g.currentLevel, g.player)
+		creepType := TypeVampire
+		if rand.Intn(7) == 0 {
+			creepType = TypeBat
+		}
+		c := g.newCreep(creepType)
 
 		safeSpace := 7.0
 		dx, dy := deltaXY(g.player.x, g.player.y, c.x, c.y)
@@ -735,7 +773,14 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 			continue
 		}
 
-		drawn += g.renderSprite(c.x, c.y, 0, 0, 0, c.sprite, screen)
+		drawn += g.renderSprite(c.x, c.y, 0, 0, 0, c.sprites[c.frame], screen)
+		if c.frames > 1 && time.Since(c.lastFrame) >= 75*time.Millisecond {
+			c.frame++
+			if c.frame == c.frames {
+				c.frame = 0
+			}
+			c.lastFrame = time.Now()
+		}
 	}
 
 	for _, p := range g.projectiles {

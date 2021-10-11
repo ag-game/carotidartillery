@@ -4,13 +4,27 @@ import (
 	"math"
 	"math/rand"
 	"sync"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
+const (
+	TypeVampire = iota
+	TypeBat
+	TypeGhost
+)
+
 type gameCreep struct {
-	x, y   float64
-	sprite *ebiten.Image
+	x, y float64
+
+	sprites []*ebiten.Image
+
+	frame     int
+	frames    int
+	lastFrame time.Time
+
+	creepType int
 
 	moveX, moveY float64
 
@@ -25,6 +39,14 @@ type gameCreep struct {
 	killScore int
 
 	sync.Mutex
+}
+
+func (c *gameCreep) queueNextAction() {
+	if c.creepType == TypeBat {
+		c.nextAction = 288 + rand.Intn(288)
+		return
+	}
+	c.nextAction = 144 + rand.Intn(720)
 }
 
 func (c *gameCreep) doNextAction() {
@@ -60,19 +82,7 @@ func (c *gameCreep) doNextAction() {
 		c.moveY *= 1
 	}
 
-	c.nextAction = 144 + rand.Intn(720)
-}
-
-func NewCreep(sprite *ebiten.Image, level *Level, player *gamePlayer) *gameCreep {
-	return &gameCreep{
-		x:         float64(1 + rand.Intn(108)),
-		y:         float64(1 + rand.Intn(108)),
-		sprite:    sprite,
-		level:     level,
-		player:    player,
-		health:    1,
-		killScore: 50,
-	}
+	c.queueNextAction()
 }
 
 func (c *gameCreep) Update() {
