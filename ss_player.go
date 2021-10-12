@@ -8,8 +8,8 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
-// CharacterSpriteSheet represents a collection of sprite images.
-type CharacterSpriteSheet struct {
+// PlayerSpriteSheet represents a collection of sprite images.
+type PlayerSpriteSheet struct {
 	Frame1 *ebiten.Image
 	Frame2 *ebiten.Image
 }
@@ -17,8 +17,8 @@ type CharacterSpriteSheet struct {
 //go:embed assets
 var assetsFS embed.FS
 
-// LoadCharacterSpriteSheet loads the embedded CharacterSpriteSheet.
-func LoadCharacterSpriteSheet() (*CharacterSpriteSheet, error) {
+// LoadPlayerSpriteSheet loads the embedded PlayerSpriteSheet.
+func LoadPlayerSpriteSheet() (*PlayerSpriteSheet, error) {
 	tileSize := 32
 
 	f, err := assetsFS.Open("assets/ojas-dungeon/character_run.png")
@@ -37,8 +37,8 @@ func LoadCharacterSpriteSheet() (*CharacterSpriteSheet, error) {
 		return sheet.SubImage(image.Rect(x*tileSize, (y+1)*tileSize, (x+1)*tileSize, y*tileSize)).(*ebiten.Image)
 	}
 
-	// Populate CharacterSpriteSheet.
-	s := &CharacterSpriteSheet{}
+	// Populate PlayerSpriteSheet.
+	s := &PlayerSpriteSheet{}
 	s.Frame1 = spriteAt(0, 0)
 	s.Frame2 = spriteAt(0, 1)
 

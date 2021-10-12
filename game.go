@@ -21,14 +21,13 @@ import (
 	"golang.org/x/text/message"
 )
 
-var spinner = []byte(`-\|/`)
-
 var bulletImage *ebiten.Image
 var flashImage *ebiten.Image
 
 var numberPrinter = message.NewPrinter(language.English)
 
-// TODO move into switch in playSound
+var colorBlood = color.RGBA{102, 0, 0, 255}
+
 const (
 	gunshotVolume    = 0.2
 	vampireDieVolume = 0.15
@@ -36,6 +35,9 @@ const (
 	playerHurtVolume = 0.4
 	playerDieVolume  = 1.6
 	munchVolume      = 0.8
+
+	spawnVampire = 1000
+	spawnGarlic  = 13
 
 	garlicActiveTime = 7 * time.Second
 )
@@ -83,13 +85,11 @@ type game struct {
 
 	mousePanX, mousePanY int
 
-	spinnerIndex int
-
 	projectiles []*projectile
 
 	batSS *BatSpriteSheet
 
-	ojasSS *CharacterSpriteSheet
+	ojasSS *PlayerSpriteSheet
 
 	heartImg      *ebiten.Image
 	vampireImage1 *ebiten.Image
@@ -160,7 +160,7 @@ func NewGame() (*game, error) {
 func (g *game) loadAssets() error {
 	var err error
 	// Load SpriteSheets.
-	g.ojasSS, err = LoadCharacterSpriteSheet()
+	g.ojasSS, err = LoadPlayerSpriteSheet()
 	if err != nil {
 		return fmt.Errorf("failed to load embedded spritesheet: %s", err)
 	}
@@ -376,7 +376,7 @@ func (g *game) reset() error {
 	// Spawn items.
 	g.level.items = nil
 	added := make(map[string]bool)
-	for i := 0; i < 16; i++ {
+	for i := 0; i < spawnGarlic; i++ {
 		itemType := itemTypeGarlic
 		c := g.newItem(itemType)
 
@@ -393,7 +393,7 @@ func (g *game) reset() error {
 
 	// Spawn creeps.
 	g.level.creeps = make([]*gameCreep, 1000)
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < spawnVampire; i++ {
 		creepType := TypeVampire
 		c := g.newCreep(creepType)
 
@@ -637,6 +637,7 @@ func (g *game) Update() error {
 	// Update boolets.
 	bulletHitThreshold := 0.5
 	removed := 0
+UPDATEPROJECTILES:
 	for i, p := range g.projectiles {
 		p.x += math.Cos(p.angle) * p.speed
 		p.y += math.Sin(p.angle) * p.speed
@@ -658,24 +659,16 @@ func (g *game) Update() error {
 			}
 
 			// Remove projectile
-			if len(g.projectiles) == 1 {
-				g.projectiles = nil
-			} else {
-				g.projectiles = append(g.projectiles[:i-removed], g.projectiles[i-removed+1:]...)
-			}
+			g.projectiles = append(g.projectiles[:i-removed], g.projectiles[i-removed+1:]...)
 			removed++
 
-			break
+			continue UPDATEPROJECTILES
 		}
 
 		clampX, clampY := g.level.Clamp(p.x, p.y)
 		if clampX != p.x || clampY != p.y {
 			// Remove projectile
-			if len(g.projectiles) == 1 {
-				g.projectiles = nil
-			} else {
-				g.projectiles = append(g.projectiles[:i-removed], g.projectiles[i-removed+1:]...)
-			}
+			g.projectiles = append(g.projectiles[:i-removed], g.projectiles[i-removed+1:]...)
 			removed++
 		}
 	}
@@ -697,6 +690,20 @@ func (g *game) Update() error {
 		err := g.playSound(SoundGunshot, gunshotVolume)
 		if err != nil {
 			return err
+		}
+	}
+
+	// Remove dead creeps.
+	if g.tick%200 == 0 {
+		removed = 0
+		for i, creep := range g.level.creeps {
+			if creep.health != 0 {
+				continue
+			}
+
+			// Remove projectile
+			g.level.creeps = append(g.level.creeps[:i-removed], g.level.creeps[i-removed+1:]...)
+			removed++
 		}
 	}
 
@@ -769,51 +776,28 @@ func (g *game) Update() error {
 	return nil
 }
 
+func (g *game) drawText(target *ebiten.Image, y float64, scale float64, text string) {
+	g.overlayImg.Clear()
+	ebitenutil.DebugPrint(g.overlayImg, text)
+	g.op.GeoM.Reset()
+	g.op.GeoM.Scale(scale, scale)
+	g.op.GeoM.Translate(float64(g.w/2)-(float64(len(text))*3*scale), y)
+	target.DrawImage(g.overlayImg, g.op)
+}
+
 // Draw draws the game on the screen.
 func (g *game) Draw(screen *ebiten.Image) {
 	if g.gameStartTime.IsZero() {
-		screen.Fill(color.RGBA{102, 0, 0, 255})
+		screen.Fill(colorBlood)
 
-		g.overlayImg.Clear()
-		ebitenutil.DebugPrint(g.overlayImg, "CAROTID")
-		g.op.GeoM.Reset()
-		g.op.GeoM.Translate(3, 0)
-		g.op.GeoM.Scale(16, 16)
-		g.op.GeoM.Translate(float64(g.w/2)-(7*54), float64(g.h/2)-250)
-		screen.DrawImage(g.overlayImg, g.op)
+		g.drawText(screen, float64(g.h/2)-350, 16, "CAROTID")
+		g.drawText(screen, float64(g.h/2)-100, 16, "ARTILLERY")
 
-		g.overlayImg.Clear()
-		ebitenutil.DebugPrint(g.overlayImg, "ARTILLERY")
-		g.op.GeoM.Reset()
-		g.op.GeoM.Translate(3, 0)
-		g.op.GeoM.Scale(16, 16)
-		g.op.GeoM.Translate(float64(g.w/2)-(9*54), float64(g.h/2))
-		screen.DrawImage(g.overlayImg, g.op)
-
-		g.overlayImg.Clear()
-		ebitenutil.DebugPrint(g.overlayImg, "KEYBOARD WASD")
-		g.op.GeoM.Reset()
-		g.op.GeoM.Translate(3, 0)
-		g.op.GeoM.Scale(4, 4)
-		g.op.GeoM.Translate(float64(g.w/2)-(13*12), float64(g.h-210))
-		screen.DrawImage(g.overlayImg, g.op)
-
-		g.overlayImg.Clear()
-		ebitenutil.DebugPrint(g.overlayImg, "GAMEPAD RECOMMENDED")
-		g.op.GeoM.Reset()
-		g.op.GeoM.Translate(3, 0)
-		g.op.GeoM.Scale(4, 4)
-		g.op.GeoM.Translate(float64(g.w/2)-(19*12), float64(g.h-145))
-		screen.DrawImage(g.overlayImg, g.op)
+		g.drawText(screen, float64(g.h-210), 4, "KEYBOARD WASD")
+		g.drawText(screen, float64(g.h-145), 4, "GAMEPAD RECOMMENDED")
 
 		if time.Now().UnixMilli()%2000 < 1500 {
-			g.overlayImg.Clear()
-			ebitenutil.DebugPrint(g.overlayImg, "PRESS ANY KEY OR BUTTON TO START")
-			g.op.GeoM.Reset()
-			g.op.GeoM.Translate(3, 0)
-			g.op.GeoM.Scale(4, 4)
-			g.op.GeoM.Translate(float64(g.w/2)-(32*12), float64(g.h-80))
-			screen.DrawImage(g.overlayImg, g.op)
+			g.drawText(screen, float64(g.h-80), 4, "PRESS ANY KEY OR BUTTON TO START")
 		}
 
 		return
@@ -826,25 +810,13 @@ func (g *game) Draw(screen *ebiten.Image) {
 		drawn = g.renderLevel(screen)
 	} else {
 		// Game over.
-		screen.Fill(color.RGBA{102, 0, 0, 255})
+		screen.Fill(colorBlood)
+
+		g.drawText(screen, float64(g.h/2)-150, 16, "GAME OVER")
 
 		if time.Since(g.gameOverTime).Milliseconds()%2000 < 1500 {
-			g.overlayImg.Clear()
-			ebitenutil.DebugPrint(g.overlayImg, "PRESS ENTER OR START TO PLAY AGAIN")
-			g.op.GeoM.Reset()
-			g.op.GeoM.Translate(3, 0)
-			g.op.GeoM.Scale(4, 4)
-			g.op.GeoM.Translate(float64(g.w/2)-(36*12), 8)
-			screen.DrawImage(g.overlayImg, g.op)
+			g.drawText(screen, 8, 4, "PRESS ENTER OR START TO PLAY AGAIN")
 		}
-
-		g.overlayImg.Clear()
-		ebitenutil.DebugPrint(g.overlayImg, "GAME OVER")
-		g.op.GeoM.Reset()
-		g.op.GeoM.Translate(3, 0)
-		g.op.GeoM.Scale(16, 16)
-		g.op.GeoM.Translate(float64(g.w/2)-495, float64(g.h/2)-200)
-		screen.DrawImage(g.overlayImg, g.op)
 	}
 
 	heartSpace := 64
@@ -856,23 +828,11 @@ func (g *game) Draw(screen *ebiten.Image) {
 	}
 
 	scoreLabel := numberPrinter.Sprintf("%d", g.player.score)
-
-	g.overlayImg.Clear()
-	ebitenutil.DebugPrint(g.overlayImg, scoreLabel)
-	g.op.GeoM.Reset()
-	g.op.GeoM.Scale(8, 8)
-	g.op.GeoM.Translate(float64(g.w/2)-float64(24*len(scoreLabel)), float64(g.h-150))
-	screen.DrawImage(g.overlayImg, g.op)
+	g.drawText(screen, float64(g.h-150), 8, scoreLabel)
 
 	if g.godMode {
 		// Draw God mode indicator.
-		g.overlayImg.Clear()
-		ebitenutil.DebugPrint(g.overlayImg, "GOD")
-		g.op.GeoM.Reset()
-		g.op.GeoM.Translate(3, 0)
-		g.op.GeoM.Scale(2, 2)
-		g.op.GeoM.Translate(float64(g.w/2)-16, float64(g.h-40))
-		screen.DrawImage(g.overlayImg, g.op)
+		g.drawText(screen, float64(g.h-40), 2, " GOD")
 	}
 
 	if !g.debugMode {

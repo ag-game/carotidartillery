@@ -38,7 +38,7 @@ func LoadBatSpriteSheet() (*BatSpriteSheet, error) {
 		return sheet.SubImage(image.Rect(x*tileSize, (y+1)*tileSize, (x+1)*tileSize, y*tileSize)).(*ebiten.Image)
 	}
 
-	// Populate CharacterSpriteSheet.
+	// Populate PlayerSpriteSheet.
 	s := &BatSpriteSheet{}
 	s.Frame1 = spriteAt(0, 0)
 	s.Frame2 = spriteAt(1, 0)
