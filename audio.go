@@ -13,8 +13,11 @@ const (
 	SoundBat
 	SoundPlayerHurt
 	SoundPlayerDie
+	SoundMunch
 	SoundGib
 )
+
+const numSounds = 7 // Must match above size.
 
 func loadMP3(context *audio.Context, p string) (*audio.Player, error) {
 	f, err := assetsFS.Open(p)

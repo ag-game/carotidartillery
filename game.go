@@ -35,6 +35,7 @@ const (
 	batDieVolume     = 1.5
 	playerHurtVolume = 0.4
 	playerDieVolume  = 1.6
+	munchVolume      = 0.8
 
 	garlicActiveTime = 7 * time.Second
 )
@@ -90,9 +91,11 @@ type game struct {
 
 	ojasSS *CharacterSpriteSheet
 
-	heartImg     *ebiten.Image
-	vampireImage *ebiten.Image
-	garlicImage  *ebiten.Image
+	heartImg      *ebiten.Image
+	vampireImage1 *ebiten.Image
+	vampireImage2 *ebiten.Image
+	vampireImage3 *ebiten.Image
+	garlicImage   *ebiten.Image
 
 	overlayImg *ebiten.Image
 	op         *ebiten.DrawImageOptions
@@ -127,8 +130,8 @@ func NewGame() (*game, error) {
 		mousePanY:  math.MinInt32,
 		op:         &ebiten.DrawImageOptions{},
 
-		soundBuffer:   make([][]*audio.Player, 6),
-		nextSound:     make([]int, 6),
+		soundBuffer:   make([][]*audio.Player, numSounds),
+		nextSound:     make([]int, numSounds),
 		activeGamepad: -1,
 	}
 
@@ -195,6 +198,7 @@ func (g *game) loadAssets() error {
 	g.soundBuffer[SoundBat] = make([]*audio.Player, 4)
 	g.soundBuffer[SoundPlayerHurt] = make([]*audio.Player, 4)
 	g.soundBuffer[SoundPlayerDie] = make([]*audio.Player, 4)
+	g.soundBuffer[SoundMunch] = make([]*audio.Player, 4)
 
 	for i := 0; i < 4; i++ {
 		stream, err := loadWav(g.audioContext, "assets/audio/gunshot.wav")
@@ -232,9 +236,15 @@ func (g *game) loadAssets() error {
 			return err
 		}
 		g.soundBuffer[SoundPlayerDie][i] = stream
+
+		stream, err = loadWav(g.audioContext, "assets/audio/munch.wav")
+		if err != nil {
+			return err
+		}
+		g.soundBuffer[SoundMunch][i] = stream
 	}
 
-	f, err = assetsFS.Open("assets/creeps/vampire.png")
+	f, err = assetsFS.Open("assets/creeps/vampire1.png")
 	if err != nil {
 		return err
 	}
@@ -242,8 +252,27 @@ func (g *game) loadAssets() error {
 	if err != nil {
 		return err
 	}
+	g.vampireImage1 = ebiten.NewImageFromImage(img)
 
-	g.vampireImage = ebiten.NewImageFromImage(img)
+	f, err = assetsFS.Open("assets/creeps/vampire2.png")
+	if err != nil {
+		return err
+	}
+	img, _, err = image.Decode(f)
+	if err != nil {
+		return err
+	}
+	g.vampireImage2 = ebiten.NewImageFromImage(img)
+
+	f, err = assetsFS.Open("assets/creeps/vampire3.png")
+	if err != nil {
+		return err
+	}
+	img, _, err = image.Decode(f)
+	if err != nil {
+		return err
+	}
+	g.vampireImage3 = ebiten.NewImageFromImage(img)
 
 	f, err = assetsFS.Open("assets/items/garlic.png")
 	if err != nil {
@@ -284,7 +313,12 @@ func (g *game) newItem(itemType int) *gameItem {
 }
 
 func (g *game) newCreep(creepType int) *gameCreep {
-	sprites := []*ebiten.Image{g.vampireImage}
+	sprites := []*ebiten.Image{
+		g.vampireImage1,
+		g.vampireImage2,
+		g.vampireImage3,
+		g.vampireImage2,
+	}
 	if creepType == TypeBat {
 		sprites = []*ebiten.Image{
 			g.batSS.Frame1,
@@ -571,6 +605,7 @@ func (g *game) Update() error {
 		dx, dy := deltaXY(g.player.x, g.player.y, item.x, item.y)
 		if dx <= 1 && dy <= 1 {
 			item.health = 0
+			g.playSound(SoundMunch, munchVolume)
 			g.player.repelUntil = time.Now().Add(garlicActiveTime)
 			g.player.score += item.useScore()
 		}
@@ -623,10 +658,25 @@ func (g *game) Update() error {
 			}
 
 			// Remove projectile
-			g.projectiles = append(g.projectiles[:i-removed], g.projectiles[i-removed+1:]...)
+			if len(g.projectiles) == 1 {
+				g.projectiles = nil
+			} else {
+				g.projectiles = append(g.projectiles[:i-removed], g.projectiles[i-removed+1:]...)
+			}
 			removed++
 
 			break
+		}
+
+		clampX, clampY := g.level.Clamp(p.x, p.y)
+		if clampX != p.x || clampY != p.y {
+			// Remove projectile
+			if len(g.projectiles) == 1 {
+				g.projectiles = nil
+			} else {
+				g.projectiles = append(g.projectiles[:i-removed], g.projectiles[i-removed+1:]...)
+			}
+			removed++
 		}
 	}
 

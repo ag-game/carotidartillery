@@ -7,9 +7,9 @@ Twin-stick shooter
 
 This game was created during the [2021 Vampire Themed Game Jam](https://itch.io/jam/vampire-themed-game-jam-october-2021).
 
-Playing with a gamepad is recommended, but not required.
-
 ## Play
+
+Playing with a gamepad is recommended.
 
 ### Browser
 
