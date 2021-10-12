@@ -13,6 +13,12 @@ type Level struct {
 
 	tiles    [][]*Tile // (Y,X) array of tiles
 	tileSize int
+
+	items []*gameItem
+
+	creeps []*gameCreep
+
+	player *gamePlayer
 }
 
 // Tile returns the tile at the provided coordinates, or nil.
@@ -40,6 +46,37 @@ func (l *Level) Clamp(x, y float64) (float64, float64) {
 		y = float64(l.h) - 1.8
 	}
 	return x, y
+}
+
+func (l *Level) newSpawnLocation() (float64, float64) {
+SPAWNLOCATION:
+	for {
+		x := float64(rand.Intn(108))
+		y := float64(rand.Intn(108))
+
+		// Too close to player.
+		playerSafeSpace := 7.0
+		dx, dy := deltaXY(x, y, l.player.x, l.player.y)
+		if dx <= playerSafeSpace && dy <= playerSafeSpace {
+			continue
+		}
+
+		// Too close to garlic.
+		garlicSafeSpace := 2.0
+		for _, item := range l.items {
+			if item.health == 0 {
+				continue
+			}
+
+			dx, dy = deltaXY(x, y, item.x, item.y)
+			if dx <= garlicSafeSpace && dy <= garlicSafeSpace {
+				continue SPAWNLOCATION
+			}
+		}
+
+		return x, y
+	}
+
 }
 
 // NewLevel returns a new randomly generated Level.

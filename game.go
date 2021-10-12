@@ -35,6 +35,8 @@ const (
 	batDieVolume     = 1.5
 	playerHurtVolume = 0.4
 	playerDieVolume  = 1.6
+
+	garlicActiveTime = 7 * time.Second
 )
 
 var startButtons = []ebiten.StandardGamepadButton{
@@ -66,8 +68,8 @@ type projectile struct {
 
 // game is an isometric demo game.
 type game struct {
-	w, h         int
-	currentLevel *Level
+	w, h  int
+	level *Level
 
 	player *gamePlayer
 
@@ -82,8 +84,6 @@ type game struct {
 
 	spinnerIndex int
 
-	creeps []*gameCreep
-
 	projectiles []*projectile
 
 	batSS *BatSpriteSheet
@@ -92,6 +92,7 @@ type game struct {
 
 	heartImg     *ebiten.Image
 	vampireImage *ebiten.Image
+	garlicImage  *ebiten.Image
 
 	overlayImg *ebiten.Image
 	op         *ebiten.DrawImageOptions
@@ -107,6 +108,8 @@ type game struct {
 	activeGamepad ebiten.GamepadID
 
 	initialButtonReleased bool
+
+	tick int
 
 	godMode    bool
 	debugMode  bool
@@ -194,37 +197,37 @@ func (g *game) loadAssets() error {
 	g.soundBuffer[SoundPlayerDie] = make([]*audio.Player, 4)
 
 	for i := 0; i < 4; i++ {
-		stream, err := loadMP3(g.audioContext, "assets/audio/gunshot.mp3")
+		stream, err := loadWav(g.audioContext, "assets/audio/gunshot.wav")
 		if err != nil {
 			return err
 		}
 		g.soundBuffer[SoundGunshot][i] = stream
 
-		stream, err = loadMP3(g.audioContext, "assets/audio/vampiredie1.mp3")
+		stream, err = loadWav(g.audioContext, "assets/audio/vampiredie1.wav")
 		if err != nil {
 			return err
 		}
 		g.soundBuffer[SoundVampireDie1][i] = stream
 
-		stream, err = loadMP3(g.audioContext, "assets/audio/vampiredie2.mp3")
+		stream, err = loadWav(g.audioContext, "assets/audio/vampiredie2.wav")
 		if err != nil {
 			return err
 		}
 		g.soundBuffer[SoundVampireDie2][i] = stream
 
-		stream, err = loadMP3(g.audioContext, "assets/audio/bat.mp3")
+		stream, err = loadWav(g.audioContext, "assets/audio/bat.wav")
 		if err != nil {
 			return err
 		}
 		g.soundBuffer[SoundBat][i] = stream
 
-		stream, err = loadMP3(g.audioContext, "assets/audio/playerhurt.mp3")
+		stream, err = loadWav(g.audioContext, "assets/audio/playerhurt.wav")
 		if err != nil {
 			return err
 		}
 		g.soundBuffer[SoundPlayerHurt][i] = stream
 
-		stream, err = loadMP3(g.audioContext, "assets/audio/playerdie.mp3")
+		stream, err = loadWav(g.audioContext, "assets/audio/playerdie.wav")
 		if err != nil {
 			return err
 		}
@@ -242,6 +245,17 @@ func (g *game) loadAssets() error {
 
 	g.vampireImage = ebiten.NewImageFromImage(img)
 
+	f, err = assetsFS.Open("assets/items/garlic.png")
+	if err != nil {
+		return err
+	}
+	img, _, err = image.Decode(f)
+	if err != nil {
+		return err
+	}
+
+	g.garlicImage = ebiten.NewImageFromImage(img)
+
 	f, err = assetsFS.Open("assets/ui/heart.png")
 	if err != nil {
 		return err
@@ -253,6 +267,20 @@ func (g *game) loadAssets() error {
 
 	g.heartImg = ebiten.NewImageFromImage(img)
 	return nil
+}
+
+func (g *game) newItem(itemType int) *gameItem {
+	sprite := g.garlicImage
+	x, y := g.level.newSpawnLocation()
+	return &gameItem{
+		itemType: itemType,
+		x:        x,
+		y:        y,
+		sprite:   sprite,
+		level:    g.level,
+		player:   g.player,
+		health:   1,
+	}
 }
 
 func (g *game) newCreep(creepType int) *gameCreep {
@@ -269,24 +297,34 @@ func (g *game) newCreep(creepType int) *gameCreep {
 		}
 	}
 
+	startingFrame := 0
+	if len(sprites) > 1 {
+		startingFrame = rand.Intn(len(sprites))
+	}
+
+	x, y := g.level.newSpawnLocation()
 	return &gameCreep{
 		creepType: creepType,
-		x:         float64(1 + rand.Intn(108)),
-		y:         float64(1 + rand.Intn(108)),
+		x:         x,
+		y:         y,
 		sprites:   sprites,
 		frames:    len(sprites),
-		level:     g.currentLevel,
+		frame:     startingFrame,
+		level:     g.level,
 		player:    g.player,
 		health:    1,
 	}
 }
 
 func (g *game) reset() error {
+	g.tick = 0
+
 	var err error
-	g.currentLevel, err = NewLevel()
+	g.level, err = NewLevel()
 	if err != nil {
 		return fmt.Errorf("failed to create new level: %s", err)
 	}
+	g.level.player = g.player
 
 	// Reset player score.
 	g.player.score = 0
@@ -301,33 +339,39 @@ func (g *game) reset() error {
 	// Remove projectiles.
 	g.projectiles = nil
 
-	// Spawn creeps.
-	g.creeps = make([]*gameCreep, 1000)
-	addedCreeps := make(map[string]bool)
-	for i := 0; i < 1000; i++ {
-		creepType := TypeVampire
-		if rand.Intn(7) == 0 {
-			creepType = TypeBat
-		}
-		c := g.newCreep(creepType)
+	// Spawn items.
+	g.level.items = nil
+	added := make(map[string]bool)
+	for i := 0; i < 16; i++ {
+		itemType := itemTypeGarlic
+		c := g.newItem(itemType)
 
-		safeSpace := 7.0
-		dx, dy := deltaXY(g.player.x, g.player.y, c.x, c.y)
-		if dx <= safeSpace || dy <= safeSpace {
-			// Too close to the spawn point.
+		addedItem := fmt.Sprintf("%0.0f-%0.0f", c.x, c.y)
+		if added[addedItem] {
+			// Already added a gameItem here.
 			i--
 			continue
 		}
 
+		g.level.items = append(g.level.items, c)
+		added[addedItem] = true
+	}
+
+	// Spawn creeps.
+	g.level.creeps = make([]*gameCreep, 1000)
+	for i := 0; i < 1000; i++ {
+		creepType := TypeVampire
+		c := g.newCreep(creepType)
+
 		addedCreep := fmt.Sprintf("%0.0f-%0.0f", c.x, c.y)
-		if addedCreeps[addedCreep] {
+		if added[addedCreep] {
 			// Already added a gameCreep here.
 			i--
 			continue
 		}
 
-		g.creeps[i] = c
-		addedCreeps[addedCreep] = true
+		g.level.creeps[i] = c
+		added[addedCreep] = true
 	}
 	return nil
 }
@@ -409,7 +453,7 @@ func (g *game) Update() error {
 	}
 
 	biteThreshold := 0.75
-	for _, c := range g.creeps {
+	for _, c := range g.level.creeps {
 		if c.health == 0 {
 			continue
 		}
@@ -419,7 +463,9 @@ func (g *game) Update() error {
 		cx, cy := c.Position()
 		dx, dy := deltaXY(g.player.x, g.player.y, cx, cy)
 		if dx <= biteThreshold && dy <= biteThreshold {
-			g.player.health--
+			if !g.godMode {
+				g.player.health--
+			}
 
 			err := g.hurtCreep(c, -1)
 			if err != nil {
@@ -435,7 +481,7 @@ func (g *game) Update() error {
 
 			g.addBloodSplatter(g.player.x, g.player.y)
 
-			if g.player.health == 0 && !g.godMode {
+			if g.player.health == 0 {
 				ebiten.SetCursorShape(ebiten.CursorShapeDefault)
 
 				g.gameOverTime = time.Now()
@@ -515,7 +561,20 @@ func (g *game) Update() error {
 	}
 
 	// Clamp camera position.
-	g.player.x, g.player.y = g.currentLevel.Clamp(g.player.x, g.player.y)
+	g.player.x, g.player.y = g.level.Clamp(g.player.x, g.player.y)
+
+	for _, item := range g.level.items {
+		if item.health == 0 {
+			continue
+		}
+
+		dx, dy := deltaXY(g.player.x, g.player.y, item.x, item.y)
+		if dx <= 1 && dy <= 1 {
+			item.health = 0
+			g.player.repelUntil = time.Now().Add(garlicActiveTime)
+			g.player.score += item.useScore()
+		}
+	}
 
 	fire := ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft)
 
@@ -547,7 +606,7 @@ func (g *game) Update() error {
 		p.x += math.Cos(p.angle) * p.speed
 		p.y += math.Sin(p.angle) * p.speed
 
-		for _, c := range g.creeps {
+		for _, c := range g.level.creeps {
 			if c.health == 0 {
 				continue
 			}
@@ -591,6 +650,40 @@ func (g *game) Update() error {
 		}
 	}
 
+	// Spawn garlic.
+	if g.tick%144*20 == 0 {
+		item := g.newItem(itemTypeGarlic)
+		g.level.items = append(g.level.items, item)
+	}
+
+	// Spawn vampires.
+	if g.tick > 144*5 && g.tick%288 == 0 {
+		for i := 0; i < g.tick/1440; i++ {
+			if rand.Intn(2) == 0 {
+				continue
+			}
+
+			creepType := TypeVampire
+			c := g.newCreep(creepType)
+
+			g.level.creeps = append(g.level.creeps, c)
+		}
+	}
+
+	// Spawn bats.
+	if g.tick > 144*5 && g.tick%144 == 0 {
+		for i := 0; i < g.tick/1440; i++ {
+			if rand.Intn(6) == 0 {
+				continue
+			}
+
+			creepType := TypeBat
+			c := g.newCreep(creepType)
+
+			g.level.creeps = append(g.level.creeps, c)
+		}
+	}
+
 	// TODO debug only
 	if inpututil.IsKeyJustPressed(ebiten.KeyV) {
 		g.debugMode = !g.debugMode
@@ -622,6 +715,7 @@ func (g *game) Update() error {
 		}
 	}
 
+	g.tick++
 	return nil
 }
 
@@ -746,21 +840,23 @@ func (g *game) Draw(screen *ebiten.Image) {
 
 // tilePosition transforms X,Y coordinates into tile positions.
 func (g *game) tilePosition(x, y float64) (float64, float64) {
-	tileSize := float64(g.currentLevel.tileSize)
+	tileSize := float64(g.level.tileSize)
 	return x * tileSize, y * tileSize
 }
 
-func (g *game) renderSprite(x float64, y float64, offsetx float64, offsety float64, angle float64, sprite *ebiten.Image, target *ebiten.Image) int {
+func (g *game) renderSprite(x float64, y float64, offsetx float64, offsety float64, angle float64, scale float64, alpha float64, sprite *ebiten.Image, target *ebiten.Image) int {
 	x, y = g.tilePosition(x, y)
 
 	// Skip drawing off-screen tiles.
 	drawX, drawY := g.levelCoordinatesToScreen(x, y)
-	padding := float64(g.currentLevel.tileSize) * 2
+	padding := float64(g.level.tileSize) * 2
 	if drawX+padding < 0 || drawY+padding < 0 || drawX > float64(g.w)+padding || drawY > float64(g.h)+padding {
 		return 0
 	}
 
 	g.op.GeoM.Reset()
+
+	g.op.GeoM.Scale(scale, scale)
 	// Rotate
 	g.op.GeoM.Translate(-16+offsetx, -16+offsety)
 	g.op.GeoM.Rotate(angle)
@@ -774,7 +870,12 @@ func (g *game) renderSprite(x float64, y float64, offsetx float64, offsety float
 	// Center.
 	g.op.GeoM.Translate(float64(g.w/2.0), float64(g.h/2.0))
 
+	g.op.ColorM.Scale(1.0, 1.0, 1.0, alpha)
+
 	target.DrawImage(sprite, g.op)
+
+	g.op.ColorM.Reset()
+
 	return 1
 }
 
@@ -783,25 +884,33 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 	var drawn int
 
 	var t *Tile
-	for y := 0; y < g.currentLevel.h; y++ {
-		for x := 0; x < g.currentLevel.w; x++ {
-			t = g.currentLevel.tiles[y][x]
+	for y := 0; y < g.level.h; y++ {
+		for x := 0; x < g.level.w; x++ {
+			t = g.level.tiles[y][x]
 			if t == nil {
 				continue // No tile at this position.
 			}
 
 			for i := range t.sprites {
-				drawn += g.renderSprite(float64(x), float64(y), 0, 0, 0, t.sprites[i], screen)
+				drawn += g.renderSprite(float64(x), float64(y), 0, 0, 0, 1.0, 1.0, t.sprites[i], screen)
 			}
 		}
 	}
 
-	for _, c := range g.creeps {
+	for _, item := range g.level.items {
+		if item.health == 0 {
+			continue
+		}
+
+		drawn += g.renderSprite(item.x, item.y, 0, 0, 0, 1.0, 1.0, item.sprite, screen)
+	}
+
+	for _, c := range g.level.creeps {
 		if c.health == 0 {
 			continue
 		}
 
-		drawn += g.renderSprite(c.x, c.y, 0, 0, 0, c.sprites[c.frame], screen)
+		drawn += g.renderSprite(c.x, c.y, 0, 0, 0, 1.0, 1.0, c.sprites[c.frame], screen)
 		if c.frames > 1 && time.Since(c.lastFrame) >= 75*time.Millisecond {
 			c.frame++
 			if c.frame == c.frames {
@@ -812,7 +921,18 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 	}
 
 	for _, p := range g.projectiles {
-		drawn += g.renderSprite(p.x, p.y, 0, 0, p.angle, bulletImage, screen)
+		drawn += g.renderSprite(p.x, p.y, 0, 0, p.angle, 1.0, 1.0, bulletImage, screen)
+	}
+
+	repelTime := g.player.repelUntil.Sub(time.Now())
+	if repelTime > 0 && repelTime < 7*time.Second {
+		scale := repelTime.Seconds() + 1
+		offset := 12 * scale
+		alpha := 0.25
+		if repelTime.Seconds() < 3 {
+			alpha = repelTime.Seconds() / 12
+		}
+		drawn += g.renderSprite(g.player.x+0.25, g.player.y+0.25, -offset, -offset, 0, scale, alpha, g.garlicImage, screen)
 	}
 
 	playerSprite := g.ojasSS.Frame1
@@ -825,14 +945,14 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 		weaponSprite = g.player.weapon.sprite
 		mul = -1
 	}
-	drawn += g.renderSprite(g.player.x, g.player.y, 0, 0, playerAngle, playerSprite, screen)
+	drawn += g.renderSprite(g.player.x, g.player.y, 0, 0, playerAngle, 1.0, 1.0, playerSprite, screen)
 	if g.player.weapon != nil {
-		drawn += g.renderSprite(g.player.x, g.player.y, 11*mul, 9, playerAngle, weaponSprite, screen)
+		drawn += g.renderSprite(g.player.x, g.player.y, 11*mul, 9, playerAngle, 1.0, 1.0, weaponSprite, screen)
 	}
 
 	flashDuration := 40 * time.Millisecond
 	if time.Since(g.player.weapon.lastFire) < flashDuration {
-		drawn += g.renderSprite(g.player.x, g.player.y, 39, -1, g.player.angle, flashImage, screen)
+		drawn += g.renderSprite(g.player.x, g.player.y, 39, -1, g.player.angle, 1.0, 1.0, flashImage, screen)
 	}
 
 	return drawn
@@ -941,7 +1061,7 @@ func (g *game) addBloodSplatter(x, y float64) {
 		}
 	}
 
-	t := g.currentLevel.Tile(int(x), int(y))
+	t := g.level.Tile(int(x), int(y))
 	if t != nil {
 		t.AddSprite(splatterSprite)
 	}

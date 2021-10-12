@@ -17,6 +17,8 @@ type gamePlayer struct {
 	score int
 
 	health int
+
+	repelUntil time.Time
 }
 
 func NewPlayer() (*gamePlayer, error) {

@@ -47,6 +47,28 @@ func (c *gameCreep) queueNextAction() {
 	c.nextAction = 144 + rand.Intn(720)
 }
 
+func (c *gameCreep) runAway() {
+	c.queueNextAction()
+
+	randMovementA := (rand.Float64() - 0.5) / 7
+	randMovementB := (rand.Float64() - 0.5) / 7
+
+	c.moveX = c.x - c.player.x
+	if c.moveX < 0 {
+		c.moveX = math.Abs(randMovementA) * -1
+	} else {
+		c.moveX = math.Abs(randMovementA)
+	}
+	c.moveY = c.y - c.player.y
+	if c.moveY < 0 {
+		c.moveY = math.Abs(randMovementB) * -1
+	} else {
+		c.moveY = math.Abs(randMovementB)
+	}
+
+	c.nextAction *= 2
+}
+
 func (c *gameCreep) doNextAction() {
 	c.queueNextAction()
 
@@ -107,6 +129,25 @@ func (c *gameCreep) Update() {
 	c.x, c.y = clampX, clampY
 	if clampX != x || clampY != y {
 		c.nextAction = 0
+		return
+	}
+
+	if !c.player.repelUntil.IsZero() && c.player.repelUntil.Sub(time.Now()) > 0 {
+		dx, dy := deltaXY(c.x, c.y, c.player.x, c.player.y)
+		if dx <= 3 && dy <= 3 {
+			c.runAway()
+		}
+	}
+
+	for _, item := range c.level.items {
+		if item.health == 0 {
+			continue
+		}
+
+		dx, dy := deltaXY(c.x, c.y, item.x, item.y)
+		if dx <= 2 && dy <= 2 {
+			c.runAway()
+		}
 	}
 }
 
