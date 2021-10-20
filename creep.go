@@ -44,14 +44,14 @@ func (c *gameCreep) queueNextAction() {
 		c.nextAction = 288 + rand.Intn(288)
 		return
 	}
-	c.nextAction = 288 + rand.Intn(720)
+	c.nextAction = 288 + rand.Intn(432)
 }
 
 func (c *gameCreep) runAway() {
 	c.queueNextAction()
 
-	randMovementA := (rand.Float64() - 0.5) / 7
-	randMovementB := (rand.Float64() - 0.5) / 7
+	randMovementA := (rand.Float64() - 0.5) / 8
+	randMovementB := (rand.Float64() - 0.5) / 8
 
 	c.moveX = c.x - c.player.x
 	if c.moveX < 0 {
@@ -67,37 +67,42 @@ func (c *gameCreep) runAway() {
 	}
 }
 
+func (c *gameCreep) seekPlayer() {
+	maxSpeed := 0.5 / 9
+	minSpeed := 0.1 / 9
+
+	a := angle(c.x, c.y, c.player.x, c.player.y)
+	c.moveX = -math.Cos(a)
+	c.moveY = -math.Sin(a)
+	for {
+		if (c.moveX < -minSpeed || c.moveX > minSpeed) || (c.moveY < -minSpeed || c.moveY > minSpeed) {
+			break
+		}
+
+		c.moveX *= 1.1
+		c.moveY *= 1.1
+	}
+	for {
+		if c.moveX >= -maxSpeed && c.moveX <= maxSpeed && c.moveY >= -maxSpeed && c.moveY <= maxSpeed {
+			break
+		}
+
+		c.moveX *= 0.9
+		c.moveY *= 0.9
+	}
+
+	c.nextAction = 1440
+}
+
 func (c *gameCreep) doNextAction() {
 	c.queueNextAction()
 
-	randMovementA := (rand.Float64() - 0.5) / 7
-	randMovementB := (rand.Float64() - 0.5) / 7
+	randMovementA := (rand.Float64() - 0.5) / 12
+	randMovementB := (rand.Float64() - 0.5) / 12
 
-	dx, dy := deltaXY(c.x, c.y, c.player.x, c.player.y)
-	seekDistance := 5.0
-	maxSpeed := 0.5 / 7
-	minSpeed := 0.1 / 7
-	if (dx < seekDistance && dy < seekDistance) || rand.Intn(66) == 0 {
-		// Seek player.
-		a := angle(c.x, c.y, c.player.x, c.player.y)
-		c.moveX = -math.Cos(a)
-		c.moveY = -math.Sin(a)
-		for {
-			if (c.moveX < -minSpeed || c.moveX > minSpeed) || (c.moveY < -minSpeed || c.moveY > minSpeed) {
-				break
-			}
-
-			c.moveX *= 1.1
-			c.moveY *= 1.1
-		}
-		for {
-			if c.moveX >= -maxSpeed && c.moveX <= maxSpeed && c.moveY >= -maxSpeed && c.moveY <= maxSpeed {
-				break
-			}
-
-			c.moveX *= 0.9
-			c.moveY *= 0.9
-		}
+	repelled := c.repelled()
+	if !repelled && rand.Intn(13) == 0 {
+		c.seekPlayer()
 	} else {
 		c.moveX = randMovementA
 		c.moveY = randMovementB
@@ -115,6 +120,14 @@ func (c *gameCreep) doNextAction() {
 	}
 }
 
+func (c *gameCreep) repelled() bool {
+	repelled := !c.player.garlicUntil.IsZero() && c.player.garlicUntil.Sub(time.Now()) > 0
+	if !c.player.holyWaterUntil.IsZero() && c.player.holyWaterUntil.Sub(time.Now()) > 0 {
+		repelled = true
+	}
+	return repelled
+}
+
 func (c *gameCreep) Update() {
 	c.Lock()
 	defer c.Unlock()
@@ -124,7 +137,15 @@ func (c *gameCreep) Update() {
 	}
 
 	c.tick++
-	if c.tick >= c.nextAction {
+
+	repelled := c.repelled()
+
+	dx, dy := deltaXY(c.x, c.y, c.player.x, c.player.y)
+	seekDistance := 2.0
+	if !repelled && dx < seekDistance && dy < seekDistance {
+		c.queueNextAction()
+		c.seekPlayer()
+	} else if c.tick >= c.nextAction {
 		c.doNextAction()
 		c.tick = 0
 	}
@@ -137,7 +158,7 @@ func (c *gameCreep) Update() {
 		return
 	}
 
-	if !c.player.repelUntil.IsZero() && c.player.repelUntil.Sub(time.Now()) > 0 {
+	if repelled {
 		dx, dy := deltaXY(c.x, c.y, c.player.x, c.player.y)
 		if dx <= 3 && dy <= 3 {
 			c.runAway()

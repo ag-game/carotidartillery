@@ -25,6 +25,26 @@ Run the following command to build a `carotidartillery` executable:
 
 Run `~/go/bin/carotidartillery` to play.
 
+## Gameplay
+
+### Items
+
+#### Garlic
+
+Eat garlic to repel creeps for 7 seconds.
+
+#### Holy water
+
+Break a vial of holy water to ward off death for 1 second.
+
+### Creeps
+
+#### Vampire
+
+Cursed creature with an insatiable thirst for blood.
+
+Some vampires take the appearance of a bat.
+
 ## Support
 
 Please share issues and suggestions [here](https://code.rocketnine.space/tslocum/carotidartillery/issues).

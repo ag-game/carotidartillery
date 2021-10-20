@@ -18,7 +18,10 @@ type gamePlayer struct {
 
 	health int
 
-	repelUntil time.Time
+	holyWaters int
+
+	garlicUntil    time.Time
+	holyWaterUntil time.Time
 }
 
 func NewPlayer() (*gamePlayer, error) {

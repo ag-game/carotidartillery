@@ -16,7 +16,8 @@ type Level struct {
 
 	items []*gameItem
 
-	creeps []*gameCreep
+	creeps     []*gameCreep
+	liveCreeps int
 
 	player *gamePlayer
 }
@@ -51,17 +52,17 @@ func (l *Level) Clamp(x, y float64) (float64, float64) {
 func (l *Level) newSpawnLocation() (float64, float64) {
 SPAWNLOCATION:
 	for {
-		x := float64(rand.Intn(108))
-		y := float64(rand.Intn(108))
+		x := float64(1 + rand.Intn(l.w-2))
+		y := float64(1 + rand.Intn(l.h-2))
 
 		// Too close to player.
-		playerSafeSpace := 7.0
+		playerSafeSpace := 18.0
 		dx, dy := deltaXY(x, y, l.player.x, l.player.y)
 		if dx <= playerSafeSpace && dy <= playerSafeSpace {
 			continue
 		}
 
-		// Too close to garlic.
+		// Too close to garlic or holy water.
 		garlicSafeSpace := 2.0
 		for _, item := range l.items {
 			if item.health == 0 {

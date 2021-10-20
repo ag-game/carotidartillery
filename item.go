@@ -8,6 +8,7 @@ import (
 
 const (
 	itemTypeGarlic = iota
+	itemTypeHolyWater
 )
 
 type gameItem struct {
@@ -26,5 +27,12 @@ type gameItem struct {
 }
 
 func (item *gameItem) useScore() int {
-	return 275
+	switch item.itemType {
+	case itemTypeGarlic:
+		return 275
+	case itemTypeHolyWater:
+		return 150
+	default:
+		return 0
+	}
 }
