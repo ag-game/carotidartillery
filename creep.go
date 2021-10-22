@@ -148,11 +148,16 @@ func (c *gameCreep) Update() {
 	}
 
 	x, y := c.x+c.moveX, c.y+c.moveY
-	if !c.level.isFloor(x, y, false) {
+	if c.level.isFloor(x, y, false) {
+		c.x, c.y = x, y
+	} else if c.level.isFloor(x, c.y, false) {
+		c.x = x
+	} else if c.level.isFloor(c.x, y, false) {
+		c.y = y
+	} else {
 		c.nextAction = 0
 		return
 	}
-	c.x, c.y = x, y
 
 	if repelled {
 		dx, dy := deltaXY(c.x, c.y, c.player.x, c.player.y)
