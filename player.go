@@ -1,10 +1,7 @@
 package main
 
 import (
-	"image"
 	"time"
-
-	"github.com/hajimehoshi/ebiten/v2"
 )
 
 type gamePlayer struct {
@@ -16,6 +13,8 @@ type gamePlayer struct {
 
 	score int
 
+	soulsRescued int
+
 	health int
 
 	holyWaters int
@@ -25,20 +24,9 @@ type gamePlayer struct {
 }
 
 func NewPlayer() (*gamePlayer, error) {
-	f, err := assetsFS.Open("assets/weapons/uzi.png")
-	if err != nil {
-		return nil, err
-	}
-	img, _, err := image.Decode(f)
-	if err != nil {
-		return nil, err
-	}
-
-	uziSprite := ebiten.NewImageFromImage(img)
-
 	p := &gamePlayer{
 		weapon: &playerWeapon{
-			sprite:   uziSprite,
+			sprite:   imageAtlas[ImageUzi],
 			cooldown: 100 * time.Millisecond,
 		},
 		health: 3,

@@ -21,9 +21,6 @@ import (
 	"golang.org/x/text/message"
 )
 
-var bulletImage *ebiten.Image
-var flashImage *ebiten.Image
-
 var numberPrinter = message.NewPrinter(language.English)
 
 var colorBlood = color.RGBA{102, 0, 0, 255}
@@ -79,7 +76,12 @@ type game struct {
 	w, h  int
 	level *Level
 
+	levelNum int
+
 	player *gamePlayer
+
+	requiredSouls int
+	spawnedPortal bool
 
 	gameStartTime time.Time
 
@@ -96,19 +98,10 @@ type game struct {
 
 	ojasSS *PlayerSpriteSheet
 
-	heartImg       *ebiten.Image
-	vampireImage1  *ebiten.Image
-	vampireImage2  *ebiten.Image
-	vampireImage3  *ebiten.Image
-	garlicImage    *ebiten.Image
-	holyWaterImage *ebiten.Image
-
 	overlayImg *ebiten.Image
 	op         *ebiten.DrawImageOptions
 
 	audioContext *audio.Context
-	nextSound    []int
-	soundBuffer  [][]*audio.Player
 
 	lastBatSound time.Time
 
@@ -123,10 +116,11 @@ type game struct {
 	flashMessageText  string
 	flashMessageUntil time.Time
 
-	godMode    bool
-	noclipMode bool
-	debugMode  bool
-	cpuProfile *os.File
+	godMode        bool
+	noclipMode     bool
+	debugMode      bool
+	fullBrightMode bool
+	cpuProfile     *os.File
 }
 
 const sampleRate = 44100
@@ -134,15 +128,13 @@ const sampleRate = 44100
 // NewGame returns a new isometric demo game.
 func NewGame() (*game, error) {
 	g := &game{
-		camScale:   2,
-		camScaleTo: 2,
-		mousePanX:  math.MinInt32,
-		mousePanY:  math.MinInt32,
-		op:         &ebiten.DrawImageOptions{},
-
-		soundBuffer:   make([][]*audio.Player, numSounds),
-		nextSound:     make([]int, numSounds),
+		camScale:      2,
+		camScaleTo:    2,
+		mousePanX:     math.MinInt32,
+		mousePanY:     math.MinInt32,
 		activeGamepad: -1,
+
+		op: &ebiten.DrawImageOptions{},
 	}
 
 	g.audioContext = audio.NewContext(sampleRate)
@@ -185,134 +177,15 @@ func (g *game) loadAssets() error {
 		return fmt.Errorf("failed to load embedded spritesheet: %s", err)
 	}
 
-	f, err := assetsFS.Open("assets/weapons/bullet.png")
-	if err != nil {
-		return err
-	}
-	img, _, err := image.Decode(f)
-	if err != nil {
-		return err
-	}
-	bulletImage = ebiten.NewImageFromImage(img)
-
-	f, err = assetsFS.Open("assets/weapons/flash.png")
-	if err != nil {
-		return err
-	}
-	img, _, err = image.Decode(f)
-	if err != nil {
-		return err
-	}
-	flashImage = ebiten.NewImageFromImage(img)
-
-	g.soundBuffer[SoundGunshot] = make([]*audio.Player, 4)
-	g.soundBuffer[SoundVampireDie1] = make([]*audio.Player, 4)
-	g.soundBuffer[SoundVampireDie2] = make([]*audio.Player, 4)
-	g.soundBuffer[SoundBat] = make([]*audio.Player, 4)
-	g.soundBuffer[SoundPlayerHurt] = make([]*audio.Player, 4)
-	g.soundBuffer[SoundPlayerDie] = make([]*audio.Player, 4)
-	g.soundBuffer[SoundMunch] = make([]*audio.Player, 4)
-
-	loadStream := func(p string) (*audio.Player, error) {
-		stream, err := loadWav(g.audioContext, p)
-		if err != nil {
-			return nil, err
-		}
-
-		// Workaround to prevent delays when playing for the first time.
-		stream.SetVolume(0)
-		stream.Play()
-		stream.Pause()
-		stream.Rewind()
-
-		return stream, nil
-	}
-
-	soundMap := map[int]string{
-		SoundGunshot:     "assets/audio/gunshot.wav",
-		SoundVampireDie1: "assets/audio/vampiredie1.wav",
-		SoundVampireDie2: "assets/audio/vampiredie2.wav",
-		SoundBat:         "assets/audio/bat.wav",
-		SoundPlayerHurt:  "assets/audio/playerhurt.wav",
-		SoundPlayerDie:   "assets/audio/playerdie.wav",
-		SoundMunch:       "assets/audio/munch.wav",
-	}
-	for i := 0; i < 4; i++ {
-		for soundID, soundPath := range soundMap {
-			g.soundBuffer[soundID][i], err = loadStream(soundPath)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	f, err = assetsFS.Open("assets/creeps/vampire1.png")
-	if err != nil {
-		return err
-	}
-	img, _, err = image.Decode(f)
-	if err != nil {
-		return err
-	}
-	g.vampireImage1 = ebiten.NewImageFromImage(img)
-
-	f, err = assetsFS.Open("assets/creeps/vampire2.png")
-	if err != nil {
-		return err
-	}
-	img, _, err = image.Decode(f)
-	if err != nil {
-		return err
-	}
-	g.vampireImage2 = ebiten.NewImageFromImage(img)
-
-	f, err = assetsFS.Open("assets/creeps/vampire3.png")
-	if err != nil {
-		return err
-	}
-	img, _, err = image.Decode(f)
-	if err != nil {
-		return err
-	}
-	g.vampireImage3 = ebiten.NewImageFromImage(img)
-
-	f, err = assetsFS.Open("assets/items/garlic.png")
-	if err != nil {
-		return err
-	}
-	img, _, err = image.Decode(f)
-	if err != nil {
-		return err
-	}
-	g.garlicImage = ebiten.NewImageFromImage(img)
-
-	f, err = assetsFS.Open("assets/items/holywater.png")
-	if err != nil {
-		return err
-	}
-	img, _, err = image.Decode(f)
-	if err != nil {
-		return err
-	}
-	g.holyWaterImage = ebiten.NewImageFromImage(img)
-
-	f, err = assetsFS.Open("assets/ui/heart.png")
-	if err != nil {
-		return err
-	}
-	img, _, err = image.Decode(f)
-	if err != nil {
-		return err
-	}
-	g.heartImg = ebiten.NewImageFromImage(img)
+	soundAtlas = loadSoundAtlas(g.audioContext)
 
 	return nil
 }
 
 func (g *game) newItem(itemType int) *gameItem {
-	sprite := g.garlicImage
+	sprite := imageAtlas[ImageGarlic]
 	if itemType == itemTypeHolyWater {
-		sprite = g.holyWaterImage
+		sprite = imageAtlas[ImageHolyWater]
 	}
 	x, y := g.level.newSpawnLocation()
 	return &gameItem{
@@ -328,10 +201,10 @@ func (g *game) newItem(itemType int) *gameItem {
 
 func (g *game) newCreep(creepType int) *gameCreep {
 	sprites := []*ebiten.Image{
-		g.vampireImage1,
-		g.vampireImage2,
-		g.vampireImage3,
-		g.vampireImage2,
+		imageAtlas[ImageVampire1],
+		imageAtlas[ImageVampire2],
+		imageAtlas[ImageVampire3],
+		imageAtlas[ImageVampire2],
 	}
 	if creepType == TypeBat {
 		sprites = []*ebiten.Image{
@@ -364,36 +237,39 @@ func (g *game) newCreep(creepType int) *gameCreep {
 	}
 }
 
-func (g *game) reset() error {
-	log.Println("Starting a new game")
+func (g *game) nextLevel() error {
+	g.levelNum++
+	if g.levelNum > 13 {
+		log.Fatal("YOU WIN")
+	}
+	return g.generateLevel()
+}
 
-	g.tick = 0
+func (g *game) generateLevel() error {
+	// Remove projectiles.
+	g.projectiles = nil
+
+	// Remove creeps.
+	if g.level != nil {
+		g.level.creeps = nil
+	}
 
 	var err error
-	g.level, err = NewLevel()
+	g.level, err = NewLevel(g.levelNum)
 	if err != nil {
 		return fmt.Errorf("failed to create new level: %s", err)
 	}
 	g.level.player = g.player
 
-	// Reset player score.
-	g.player.score = 0
-
-	// Reset player health.
-	g.player.health = 3
-
 	// Position player.
 	for {
-		g.player.x = float64(rand.Intn(108))
-		g.player.y = float64(rand.Intn(108))
+		g.player.x = float64(rand.Intn(g.level.w))
+		g.player.y = float64(rand.Intn(g.level.h))
 
 		if g.level.isFloor(g.player.x, g.player.y, false) {
 			break
 		}
 	}
-
-	// Remove projectiles.
-	g.projectiles = nil
 
 	// Spawn items.
 	g.level.items = nil
@@ -444,6 +320,30 @@ func (g *game) reset() error {
 		g.level.creeps[i] = c
 		added[addedCreep] = true
 	}
+	return nil
+}
+
+func (g *game) reset() error {
+	log.Println("Starting a new game")
+
+	g.tick = 0
+
+	g.levelNum = 1
+
+	err := g.generateLevel()
+	if err != nil {
+		return err
+	}
+
+	// Reset player score.
+	g.player.score = 0
+
+	// Reset souls rescued.
+	g.player.soulsRescued = 0
+
+	// Reset player health.
+	g.player.health = 3
+
 	return nil
 }
 
@@ -592,6 +492,24 @@ func (g *game) Update() error {
 	} else if g.camScaleTo > 4 {
 		g.camScaleTo = 4
 	} TODO */
+
+	// Update target zoom level.
+	if g.debugMode {
+		var scrollY float64
+		if ebiten.IsKeyPressed(ebiten.KeyC) || ebiten.IsKeyPressed(ebiten.KeyPageDown) {
+			scrollY = -0.25
+		} else if ebiten.IsKeyPressed(ebiten.KeyE) || ebiten.IsKeyPressed(ebiten.KeyPageUp) {
+			scrollY = .25
+		} else {
+			_, scrollY = ebiten.Wheel()
+			if scrollY < -1 {
+				scrollY = -1
+			} else if scrollY > 1 {
+				scrollY = 1
+			}
+		}
+		g.camScaleTo += scrollY * (g.camScaleTo / 7)
+	}
 
 	// Smooth zoom transition.
 	div := 10.0
@@ -834,6 +752,21 @@ UPDATEPROJECTILES:
 		g.player.holyWaters++
 		g.flashMessage("+ HOLY WATER")
 	}
+	if ebiten.IsKeyPressed(ebiten.KeyControl) && inpututil.IsKeyJustPressed(ebiten.Key6) {
+		g.fullBrightMode = !g.fullBrightMode
+		if g.fullBrightMode {
+			g.flashMessage("FULLBRIGHT MODE ACTIVATED")
+		} else {
+			g.flashMessage("FULLBRIGHT MODE DEACTIVATED")
+		}
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyEqual) {
+		err := g.nextLevel()
+		if err != nil {
+			return err
+		}
+		g.flashMessage(fmt.Sprintf("WARPED TO LEVEL %d", g.levelNum))
+	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyV) {
 		g.debugMode = !g.debugMode
 		if g.debugMode {
@@ -922,7 +855,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 	for i := 0; i < g.player.health; i++ {
 		g.op.GeoM.Reset()
 		g.op.GeoM.Translate(float64(heartX+(i*heartSpace)), 32)
-		screen.DrawImage(g.heartImg, g.op)
+		screen.DrawImage(imageAtlas[ImageHeart], g.op)
 	}
 
 	holyWaterSpace := 16
@@ -930,7 +863,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 	for i := 0; i < g.player.holyWaters; i++ {
 		g.op.GeoM.Reset()
 		g.op.GeoM.Translate(float64(holyWaterX+(i*holyWaterSpace)), 76)
-		screen.DrawImage(g.holyWaterImage, g.op)
+		screen.DrawImage(imageAtlas[ImageHolyWater], g.op)
 	}
 
 	scoreLabel := numberPrinter.Sprintf("%d", g.player.score)
@@ -1002,6 +935,10 @@ func (g *game) renderSprite(x float64, y float64, offsetx float64, offsety float
 
 // Calculate color scale to apply shadows.
 func (g *game) colorScale(x, y float64) float64 {
+	if g.fullBrightMode {
+		return 1
+	}
+
 	dx, dy := deltaXY(x, y, g.player.x, g.player.y)
 
 	sD := 7 / (dx + dy)
@@ -1067,7 +1004,7 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 	}
 
 	for _, p := range g.projectiles {
-		drawn += g.renderSprite(p.x, p.y, 0, 0, p.angle, 1.0, g.colorScale(p.x, p.y), 1.0, bulletImage, screen)
+		drawn += g.renderSprite(p.x, p.y, 0, 0, p.angle, 1.0, g.colorScale(p.x, p.y), 1.0, imageAtlas[ImageBullet], screen)
 	}
 
 	repelTime := g.player.garlicUntil.Sub(time.Now())
@@ -1078,7 +1015,7 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 		if repelTime.Seconds() < 3 {
 			alpha = repelTime.Seconds() / 12
 		}
-		drawn += g.renderSprite(g.player.x+0.25, g.player.y+0.25, -offset, -offset, 0, scale, 1.0, alpha, g.garlicImage, screen)
+		drawn += g.renderSprite(g.player.x+0.25, g.player.y+0.25, -offset, -offset, 0, scale, 1.0, alpha, imageAtlas[ImageGarlic], screen)
 	}
 
 	holyWaterTime := g.player.holyWaterUntil.Sub(time.Now())
@@ -1089,7 +1026,7 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 		if holyWaterTime.Seconds() < 3 {
 			alpha = holyWaterTime.Seconds() / 2
 		}
-		drawn += g.renderSprite(g.player.x+0.25, g.player.y+0.25, -offset, -offset, 0, scale, 1.0, alpha, g.holyWaterImage, screen)
+		drawn += g.renderSprite(g.player.x+0.25, g.player.y+0.25, -offset, -offset, 0, scale, 1.0, alpha, imageAtlas[ImageHolyWater], screen)
 	}
 
 	playerSprite := g.ojasSS.Frame1
@@ -1109,7 +1046,7 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 
 	flashDuration := 40 * time.Millisecond
 	if time.Since(g.player.weapon.lastFire) < flashDuration {
-		drawn += g.renderSprite(g.player.x, g.player.y, 39, -1, g.player.angle, 1.0, 1.0, 1.0, flashImage, screen)
+		drawn += g.renderSprite(g.player.x, g.player.y, 39, -1, g.player.angle, 1.0, 1.0, 1.0, imageAtlas[ImageMuzzleFlash], screen)
 	}
 
 	return drawn
@@ -1125,10 +1062,10 @@ func (g *game) resetExpiredTimers() {
 }
 
 func (g *game) playSound(sound int, volume float64) error {
-	player := g.soundBuffer[sound][g.nextSound[sound]]
-	g.nextSound[sound]++
-	if g.nextSound[sound] > 3 {
-		g.nextSound[sound] = 0
+	player := soundAtlas[sound][nextSound[sound]]
+	nextSound[sound]++
+	if nextSound[sound] > 3 {
+		nextSound[sound] = 0
 	}
 	player.Pause()
 	player.Rewind()

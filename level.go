@@ -97,11 +97,14 @@ SPAWNLOCATION:
 }
 
 // NewLevel returns a new randomly generated Level.
-func NewLevel() (*Level, error) {
-	// Create a 216x216 Level.
+func NewLevel(levelNum int) (*Level, error) {
+	multiplier := levelNum
+	if multiplier > 2 {
+		multiplier = 2
+	}
 	l := &Level{
-		w:        216,
-		h:        216,
+		w:        336 * multiplier,
+		h:        336 * multiplier,
 		tileSize: 32,
 	}
 
@@ -110,14 +113,18 @@ func NewLevel() (*Level, error) {
 		return nil, fmt.Errorf("failed to load embedded spritesheet: %s", err)
 	}
 
-	dungeon := dungeon.NewDungeon(l.w/dungeonScale, 13)
+	rooms := 33
+	if multiplier == 2 {
+		rooms = 66
+	}
+	d := dungeon.NewDungeon(l.w/dungeonScale, rooms)
 	dungeonFloor := 1
 	l.tiles = make([][]*Tile, l.h)
 	for y := 0; y < l.h; y++ {
 		l.tiles[y] = make([]*Tile, l.w)
 		for x := 0; x < l.w; x++ {
 			t := &Tile{}
-			if y < l.h-1 && dungeon.Grid[x/dungeonScale][y/dungeonScale] == dungeonFloor {
+			if y < l.h-1 && d.Grid[x/dungeonScale][y/dungeonScale] == dungeonFloor {
 				if rand.Intn(13) == 0 {
 					t.AddSprite(sandstoneSS.FloorC)
 				} else {
