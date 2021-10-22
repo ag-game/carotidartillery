@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"time"
+
+	"github.com/Meshiest/go-dungeon/dungeon"
 )
+
+const dungeonScale = 4
 
 // Level represents a game level.
 type Level struct {
@@ -35,18 +38,27 @@ func (l *Level) Size() (width, height int) {
 	return l.w, l.h
 }
 
-func (l *Level) Clamp(x, y float64) (float64, float64) {
-	if x < 0.3 {
-		x = 0.3
-	} else if x > float64(l.w)-1.3 {
-		x = float64(l.w) - 1.3
+func (l *Level) isFloor(x float64, y float64, exact bool) bool {
+	offsetA := .25
+	offsetB := .75
+	if exact {
+		offsetA = 0
+		offsetB = 0
 	}
-	if y < 0.4 {
-		y = 0.4
-	} else if y > float64(l.h)-1.8 {
-		y = float64(l.h) - 1.8
+
+	t := l.Tile(int(x+offsetA), int(y+offsetA))
+	if t == nil {
+		return false
 	}
-	return x, y
+	if !t.floor {
+		return false
+	}
+
+	t = l.Tile(int(x+offsetB), int(y+offsetB))
+	if t == nil {
+		return false
+	}
+	return t.floor
 }
 
 func (l *Level) newSpawnLocation() (float64, float64) {
@@ -54,6 +66,10 @@ SPAWNLOCATION:
 	for {
 		x := float64(1 + rand.Intn(l.w-2))
 		y := float64(1 + rand.Intn(l.h-2))
+
+		if !l.isFloor(x, y, false) {
+			continue
+		}
 
 		// Too close to player.
 		playerSafeSpace := 18.0
@@ -82,10 +98,10 @@ SPAWNLOCATION:
 
 // NewLevel returns a new randomly generated Level.
 func NewLevel() (*Level, error) {
-	// Create a 108x108 Level.
+	// Create a 216x216 Level.
 	l := &Level{
-		w:        108,
-		h:        108,
+		w:        216,
+		h:        216,
 		tileSize: 32,
 	}
 
@@ -94,47 +110,108 @@ func NewLevel() (*Level, error) {
 		return nil, fmt.Errorf("failed to load embedded spritesheet: %s", err)
 	}
 
-	_ = sandstoneSS
-
-	// Generate a unique permutation each time.
-	r := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
-
-	// Fill each tile with one or more sprites randomly.
+	dungeon := dungeon.NewDungeon(l.w/dungeonScale, 13)
+	dungeonFloor := 1
 	l.tiles = make([][]*Tile, l.h)
 	for y := 0; y < l.h; y++ {
 		l.tiles[y] = make([]*Tile, l.w)
 		for x := 0; x < l.w; x++ {
 			t := &Tile{}
-			t.AddSprite(sandstoneSS.FloorA)
-
-			val := r.Intn(1000)
-			switch {
-			case x == 0 && y == 0:
-				t.AddSprite(sandstoneSS.WallTopLeft)
-			case x == l.w-1 && y == 0:
-				t.AddSprite(sandstoneSS.WallTopRight)
-			case x == 0 && y == l.h-1:
-				t.AddSprite(sandstoneSS.WallBottom)
-			case x == l.w-1 && y == l.h-1:
-				t.AddSprite(sandstoneSS.WallBottom)
-			case y == 0:
-				if x%(l.w/7) == 1 {
-					t.AddSprite(sandstoneSS.WallPillar)
+			if y < l.h-1 && dungeon.Grid[x/dungeonScale][y/dungeonScale] == dungeonFloor {
+				if rand.Intn(13) == 0 {
+					t.AddSprite(sandstoneSS.FloorC)
 				} else {
-					t.AddSprite(sandstoneSS.WallTop)
+					t.AddSprite(sandstoneSS.FloorA)
 				}
-			case y == l.h-1:
-				t.AddSprite(sandstoneSS.WallBottom)
-			case x == 0:
-				t.AddSprite(sandstoneSS.WallLeft)
-			case x == l.w-1:
-				t.AddSprite(sandstoneSS.WallRight)
-			case val < 275:
-				//t.AddSprite(sandstoneSS.FloorB)
-			case val < 500:
-				t.AddSprite(sandstoneSS.FloorC)
+				t.floor = true
 			}
 			l.tiles[y][x] = t
+		}
+	}
+
+	neighbors := func(x, y int) [][2]int {
+		return [][2]int{
+			{x - 1, y - 1},
+			{x, y - 1},
+			{x + 1, y - 1},
+			{x + 1, y},
+			{x + 1, y + 1},
+			{x, y + 1},
+			{x - 1, y + 1},
+			{x - 1, y},
+		}
+	}
+
+	floorTile := func(x, y int) bool {
+		t := l.Tile(x, y)
+		if t == nil {
+			return false
+		}
+		return t.floor
+	}
+
+	// Add walls.
+	for x := 0; x < l.w; x++ {
+		for y := 0; y < l.h; y++ {
+			t := l.Tile(x, y)
+			if t == nil {
+				continue
+			}
+			if !t.floor {
+				continue
+			}
+			for _, n := range neighbors(x, y) {
+				nx, ny := n[0], n[1]
+				neighbor := l.Tile(nx, ny)
+				if neighbor == nil || neighbor.floor || neighbor.wall {
+					continue
+				}
+				neighbor.wall = true
+
+				// From perspective of neighbor tile.
+				bottom := floorTile(nx, ny+1)
+				top := floorTile(nx, ny-1)
+				right := floorTile(nx+1, ny)
+				left := floorTile(nx-1, ny)
+				topLeft := floorTile(nx-1, ny-1)
+				topRight := floorTile(nx+1, ny-1)
+				bottomLeft := floorTile(nx-1, ny+1)
+				bottomRight := floorTile(nx+1, ny+1)
+
+				// Determine which wall sprite to belongs here.
+				spriteTop := !top && bottom
+				spriteLeft := (left || bottomLeft) && !right && !bottomRight && !bottom
+				spriteRight := (right || bottomRight) && !left && !bottomLeft && !bottom
+				spriteBottomRight := !topLeft && !top && topRight && !bottomLeft && !bottom && !bottomRight
+				spriteBottomLeft := topLeft && !top && !topRight && !bottomLeft && !bottom && !bottomRight
+				spriteBottom := top && !bottom
+
+				// Add wall sprite.
+				switch {
+				case spriteTop:
+					if !bottomLeft || !bottomRight || left || right {
+						neighbor.AddSprite(sandstoneSS.WallPillar)
+					} else {
+						neighbor.AddSprite(sandstoneSS.WallTop)
+					}
+				case spriteLeft:
+					if spriteBottom {
+						neighbor.AddSprite(sandstoneSS.WallBottom)
+					}
+					neighbor.AddSprite(sandstoneSS.WallLeft)
+				case spriteRight:
+					if spriteBottom {
+						neighbor.AddSprite(sandstoneSS.WallBottom)
+					}
+					neighbor.AddSprite(sandstoneSS.WallRight)
+				case spriteBottomLeft:
+					neighbor.AddSprite(sandstoneSS.WallBottomLeft)
+				case spriteBottomRight:
+					neighbor.AddSprite(sandstoneSS.WallBottomRight)
+				case spriteBottom:
+					neighbor.AddSprite(sandstoneSS.WallBottom)
+				}
+			}
 		}
 	}
 

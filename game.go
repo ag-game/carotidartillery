@@ -41,6 +41,8 @@ const (
 
 	garlicActiveTime    = 7 * time.Second
 	holyWaterActiveTime = time.Second
+
+	maxCreeps = 3000 // TODO optimize and raise
 )
 
 var startButtons = []ebiten.StandardGamepadButton{
@@ -390,8 +392,14 @@ func (g *game) reset() error {
 	g.player.health = 3
 
 	// Position player.
-	g.player.x = float64(rand.Intn(108))
-	g.player.y = float64(rand.Intn(108))
+	for {
+		g.player.x = float64(rand.Intn(108))
+		g.player.y = float64(rand.Intn(108))
+
+		if g.level.isFloor(g.player.x, g.player.y, false) {
+			break
+		}
+	}
 
 	// Remove projectiles.
 	g.projectiles = nil
@@ -414,20 +422,19 @@ func (g *game) reset() error {
 		added[addedItem] = true
 	}
 	// Spawn starting garlic.
-	garlicOffsetA := 8 - float64(rand.Intn(16))
-	garlicOffsetB := 8 - float64(rand.Intn(16))
-	startingGarlicX := g.player.x + 2 + garlicOffsetA
-	startingGarlicY := g.player.y + 2 + garlicOffsetB
-	clampX, clampY := g.level.Clamp(startingGarlicX, startingGarlicY)
-	if clampX != startingGarlicX {
-		startingGarlicX = g.player.x - 2 - garlicOffsetA
-	}
-	if clampY != startingGarlicY {
-		startingGarlicY = g.player.y - 2 - garlicOffsetB
-	}
 	item := g.newItem(itemTypeGarlic)
-	item.x = startingGarlicX
-	item.y = startingGarlicY
+	for {
+		garlicOffsetA := 8 - float64(rand.Intn(16))
+		garlicOffsetB := 8 - float64(rand.Intn(16))
+		startingGarlicX := g.player.x + 2 + garlicOffsetA
+		startingGarlicY := g.player.y + 2 + garlicOffsetB
+
+		if g.level.isFloor(startingGarlicX, startingGarlicY, false) {
+			item.x = startingGarlicX
+			item.y = startingGarlicY
+			break
+		}
+	}
 	g.level.items = append(g.level.items, item)
 
 	// Spawn creeps.
@@ -587,11 +594,11 @@ func (g *game) Update() error {
 	g.level.liveCreeps = liveCreeps
 
 	// Clamp target zoom level.
-	if g.camScaleTo < 2 {
+	/*if g.camScaleTo < 2 {
 		g.camScaleTo = 2
 	} else if g.camScaleTo > 4 {
 		g.camScaleTo = 4
-	}
+	} TODO */
 
 	// Smooth zoom transition.
 	div := 10.0
@@ -604,12 +611,13 @@ func (g *game) Update() error {
 	pan := 0.05
 
 	// Pan camera.
+	px, py := g.player.x, g.player.y
 	if g.activeGamepad != -1 {
 		h := ebiten.StandardGamepadAxisValue(g.activeGamepad, ebiten.StandardGamepadAxisLeftStickHorizontal)
 		v := ebiten.StandardGamepadAxisValue(g.activeGamepad, ebiten.StandardGamepadAxisLeftStickVertical)
 		if v < -gamepadDeadZone || v > gamepadDeadZone || h < -gamepadDeadZone || h > gamepadDeadZone {
-			g.player.x += h * pan
-			g.player.y += v * pan
+			px += h * pan
+			py += v * pan
 		}
 	} else {
 		if ebiten.IsKeyPressed(ebiten.KeyShift) {
@@ -617,22 +625,25 @@ func (g *game) Update() error {
 		}
 
 		if ebiten.IsKeyPressed(ebiten.KeyLeft) || ebiten.IsKeyPressed(ebiten.KeyA) {
-			g.player.x -= pan
+			px -= pan
 		}
 		if ebiten.IsKeyPressed(ebiten.KeyRight) || ebiten.IsKeyPressed(ebiten.KeyD) {
-			g.player.x += pan
+			px += pan
 		}
 		if ebiten.IsKeyPressed(ebiten.KeyDown) || ebiten.IsKeyPressed(ebiten.KeyS) {
-			g.player.y += pan
+			py += pan
 		}
 		if ebiten.IsKeyPressed(ebiten.KeyUp) || ebiten.IsKeyPressed(ebiten.KeyW) {
-			g.player.y -= pan
+			py -= pan
 		}
 	}
 
-	// Clamp camera position.
-	if !g.noclipMode {
-		g.player.x, g.player.y = g.level.Clamp(g.player.x, g.player.y)
+	if g.noclipMode || g.level.isFloor(px, py, false) {
+		g.player.x, g.player.y = px, py
+	} else if g.level.isFloor(px, g.player.y, false) {
+		g.player.x = px
+	} else if g.level.isFloor(g.player.x, py, false) {
+		g.player.y = py
 	}
 
 	for _, item := range g.level.items {
@@ -709,11 +720,11 @@ UPDATEPROJECTILES:
 			continue UPDATEPROJECTILES
 		}
 
-		clampX, clampY := g.level.Clamp(p.x, p.y)
-		if clampX != p.x || clampY != p.y {
+		if !g.level.isFloor(p.x, p.y, true) {
 			// Remove projectile
 			g.projectiles = append(g.projectiles[:i-removed], g.projectiles[i-removed+1:]...)
 			removed++
+			// TODO Add bullet hole
 		}
 	}
 
@@ -771,40 +782,42 @@ UPDATEPROJECTILES:
 		}
 	}
 
-	// Spawn vampires.
-	if g.tick%144 == 0 {
-		spawnAmount := rand.Intn(26 + (g.tick / (144 * 3)))
-		if len(g.level.creeps) < 500 {
-			spawnAmount *= 4
-		}
-		if g.debugMode && spawnAmount > 0 {
-			log.Printf("SPAWN %d VAMPIRES", spawnAmount)
-		}
-		for i := 0; i < spawnAmount; i++ {
-			creepType := TypeVampire
-			c := g.newCreep(creepType)
+	if len(g.level.creeps) < maxCreeps {
+		// Spawn vampires.
+		if g.tick%144 == 0 {
+			spawnAmount := rand.Intn(26 + (g.tick / (144 * 3)))
+			if len(g.level.creeps) < 500 {
+				spawnAmount *= 4
+			}
+			if g.debugMode && spawnAmount > 0 {
+				log.Printf("SPAWN %d VAMPIRES", spawnAmount)
+			}
+			for i := 0; i < spawnAmount; i++ {
+				creepType := TypeVampire
+				c := g.newCreep(creepType)
 
-			g.level.creeps = append(g.level.creeps, c)
+				g.level.creeps = append(g.level.creeps, c)
+			}
 		}
-	}
 
-	// Spawn bats.
-	if g.tick%144 == 0 {
-		spawnAmount := g.tick / 288
-		if spawnAmount < 1 {
-			spawnAmount = 1
-		} else if spawnAmount > 12 {
-			spawnAmount = 12
-		}
-		spawnAmount = rand.Intn(spawnAmount)
-		if g.debugMode && spawnAmount > 0 {
-			log.Printf("SPAWN %d BATS", spawnAmount)
-		}
-		for i := 0; i < spawnAmount; i++ {
-			creepType := TypeBat
-			c := g.newCreep(creepType)
+		// Spawn bats.
+		if g.tick%144 == 0 {
+			spawnAmount := g.tick / 288
+			if spawnAmount < 1 {
+				spawnAmount = 1
+			} else if spawnAmount > 12 {
+				spawnAmount = 12
+			}
+			spawnAmount = rand.Intn(spawnAmount)
+			if g.debugMode && spawnAmount > 0 {
+				log.Printf("SPAWN %d BATS", spawnAmount)
+			}
+			for i := 0; i < spawnAmount; i++ {
+				creepType := TypeBat
+				c := g.newCreep(creepType)
 
-			g.level.creeps = append(g.level.creeps, c)
+				g.level.creeps = append(g.level.creeps, c)
+			}
 		}
 	}
 

@@ -8,6 +8,8 @@ import (
 // sprites may be added to a Tile.
 type Tile struct {
 	sprites []*ebiten.Image
+	floor   bool
+	wall    bool
 }
 
 // AddSprite adds a sprite to the Tile.

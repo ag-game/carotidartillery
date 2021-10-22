@@ -3,12 +3,11 @@ package main
 import (
 	"log"
 	"math/rand"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
-
-	_ "net/http/pprof"
 
 	"github.com/hajimehoshi/ebiten/v2"
 )
