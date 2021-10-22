@@ -121,10 +121,7 @@ func (c *gameCreep) doNextAction() {
 }
 
 func (c *gameCreep) repelled() bool {
-	repelled := !c.player.garlicUntil.IsZero() && c.player.garlicUntil.Sub(time.Now()) > 0
-	if !c.player.holyWaterUntil.IsZero() && c.player.holyWaterUntil.Sub(time.Now()) > 0 {
-		repelled = true
-	}
+	repelled := !c.player.garlicUntil.IsZero() || !c.player.holyWaterUntil.IsZero()
 	return repelled
 }
 

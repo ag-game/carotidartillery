@@ -51,4 +51,5 @@ Please share issues and suggestions [here](https://code.rocketnine.space/tslocum
 
 ## Dependencies
 
-- [ebiten](https://github.com/hajimehoshi/ebiten) - 2D game engine
+- [ebiten](https://github.com/hajimehoshi/ebiten) - Game engine
+- [go-dungeon](https://github.com/meshiest/go-dungeon) - Dungeon layout generator

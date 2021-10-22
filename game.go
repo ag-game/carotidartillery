@@ -42,7 +42,9 @@ const (
 	garlicActiveTime    = 7 * time.Second
 	holyWaterActiveTime = time.Second
 
-	maxCreeps = 3000 // TODO optimize and raise
+	maxCreeps = 3333 // TODO optimize and raise
+
+	batSoundDelay = 250 * time.Millisecond
 )
 
 var startButtons = []ebiten.StandardGamepadButton{
@@ -211,48 +213,37 @@ func (g *game) loadAssets() error {
 	g.soundBuffer[SoundPlayerDie] = make([]*audio.Player, 4)
 	g.soundBuffer[SoundMunch] = make([]*audio.Player, 4)
 
+	loadStream := func(p string) (*audio.Player, error) {
+		stream, err := loadWav(g.audioContext, p)
+		if err != nil {
+			return nil, err
+		}
+
+		// Workaround to prevent delays when playing for the first time.
+		stream.SetVolume(0)
+		stream.Play()
+		stream.Pause()
+		stream.Rewind()
+
+		return stream, nil
+	}
+
+	soundMap := map[int]string{
+		SoundGunshot:     "assets/audio/gunshot.wav",
+		SoundVampireDie1: "assets/audio/vampiredie1.wav",
+		SoundVampireDie2: "assets/audio/vampiredie2.wav",
+		SoundBat:         "assets/audio/bat.wav",
+		SoundPlayerHurt:  "assets/audio/playerhurt.wav",
+		SoundPlayerDie:   "assets/audio/playerdie.wav",
+		SoundMunch:       "assets/audio/munch.wav",
+	}
 	for i := 0; i < 4; i++ {
-		stream, err := loadWav(g.audioContext, "assets/audio/gunshot.wav")
-		if err != nil {
-			return err
+		for soundID, soundPath := range soundMap {
+			g.soundBuffer[soundID][i], err = loadStream(soundPath)
+			if err != nil {
+				return err
+			}
 		}
-		g.soundBuffer[SoundGunshot][i] = stream
-
-		stream, err = loadWav(g.audioContext, "assets/audio/vampiredie1.wav")
-		if err != nil {
-			return err
-		}
-		g.soundBuffer[SoundVampireDie1][i] = stream
-
-		stream, err = loadWav(g.audioContext, "assets/audio/vampiredie2.wav")
-		if err != nil {
-			return err
-		}
-		g.soundBuffer[SoundVampireDie2][i] = stream
-
-		stream, err = loadWav(g.audioContext, "assets/audio/bat.wav")
-		if err != nil {
-			return err
-		}
-		g.soundBuffer[SoundBat][i] = stream
-
-		stream, err = loadWav(g.audioContext, "assets/audio/playerhurt.wav")
-		if err != nil {
-			return err
-		}
-		g.soundBuffer[SoundPlayerHurt][i] = stream
-
-		stream, err = loadWav(g.audioContext, "assets/audio/playerdie.wav")
-		if err != nil {
-			return err
-		}
-		g.soundBuffer[SoundPlayerDie][i] = stream
-
-		stream, err = loadWav(g.audioContext, "assets/audio/munch.wav")
-		if err != nil {
-			return err
-		}
-		g.soundBuffer[SoundMunch][i] = stream
 	}
 
 	f, err = assetsFS.Open("assets/creeps/vampire1.png")
@@ -532,6 +523,8 @@ func (g *game) Update() error {
 		return nil
 	}
 
+	g.resetExpiredTimers()
+
 	biteThreshold := 0.75
 	liveCreeps := 0
 	for _, c := range g.level.creeps {
@@ -544,7 +537,7 @@ func (g *game) Update() error {
 		cx, cy := c.Position()
 		dx, dy := deltaXY(g.player.x, g.player.y, cx, cy)
 		if dx <= biteThreshold && dy <= biteThreshold {
-			if !g.godMode && g.player.garlicUntil.Sub(time.Now()) <= 0 && g.player.holyWaterUntil.Sub(time.Now()) <= 0 {
+			if !g.godMode && !c.repelled() {
 				if g.player.holyWaters > 0 {
 					// TODO g.playSound(SoundItemUseHolyWater, useholyWaterVolume)
 					g.player.holyWaterUntil = time.Now().Add(holyWaterActiveTime)
@@ -582,7 +575,7 @@ func (g *game) Update() error {
 					panic(err)
 				}
 			}
-		} else if c.creepType == TypeBat && (dx <= 12 && dy <= 7) && rand.Intn(166) == 6 && time.Since(g.lastBatSound) >= 100*time.Millisecond {
+		} else if c.creepType == TypeBat && (dx <= 12 && dy <= 7) && rand.Intn(166) == 6 && time.Since(g.lastBatSound) >= batSoundDelay {
 			g.playSound(SoundBat, batDieVolume)
 			g.lastBatSound = time.Now()
 		}
@@ -971,7 +964,8 @@ func (g *game) tilePosition(x, y float64) (float64, float64) {
 	return x * tileSize, y * tileSize
 }
 
-func (g *game) renderSprite(x float64, y float64, offsetx float64, offsety float64, angle float64, scale float64, alpha float64, sprite *ebiten.Image, target *ebiten.Image) int {
+// renderSprite renders a sprite on the screen.
+func (g *game) renderSprite(x float64, y float64, offsetx float64, offsety float64, angle float64, scale float64, colorScale float64, alpha float64, sprite *ebiten.Image, target *ebiten.Image) int {
 	x, y = g.tilePosition(x, y)
 
 	// Skip drawing off-screen tiles.
@@ -997,13 +991,38 @@ func (g *game) renderSprite(x float64, y float64, offsetx float64, offsety float
 	// Center.
 	g.op.GeoM.Translate(float64(g.w/2.0), float64(g.h/2.0))
 
-	g.op.ColorM.Scale(1.0, 1.0, 1.0, alpha)
+	g.op.ColorM.Scale(colorScale, colorScale, colorScale, alpha)
 
 	target.DrawImage(sprite, g.op)
 
 	g.op.ColorM.Reset()
 
 	return 1
+}
+
+// Calculate color scale to apply shadows.
+func (g *game) colorScale(x, y float64) float64 {
+	dx, dy := deltaXY(x, y, g.player.x, g.player.y)
+
+	sD := 7 / (dx + dy)
+	if sD > 1 {
+		sD = 1
+	}
+
+	sDB := sD
+	if dx > 4 {
+		sDB *= 0.6 / (dx / 4)
+	}
+	if dy > 4 {
+		sDB *= 0.6 / (dy / 4)
+	}
+
+	sD = sD * 2 * sDB
+	if sD > 1 {
+		sD = 1
+	}
+
+	return sD
 }
 
 // renderLevel draws the current Level on the screen.
@@ -1019,7 +1038,7 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 			}
 
 			for i := range t.sprites {
-				drawn += g.renderSprite(float64(x), float64(y), 0, 0, 0, 1.0, 1.0, t.sprites[i], screen)
+				drawn += g.renderSprite(float64(x), float64(y), 0, 0, 0, 1.0, g.colorScale(float64(x), float64(y)), 1.0, t.sprites[i], screen)
 			}
 		}
 	}
@@ -1029,7 +1048,7 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 			continue
 		}
 
-		drawn += g.renderSprite(item.x, item.y, 0, 0, 0, 1.0, 1.0, item.sprite, screen)
+		drawn += g.renderSprite(item.x, item.y, 0, 0, 0, 1.0, g.colorScale(item.x, item.y), 1.0, item.sprite, screen)
 	}
 
 	for _, c := range g.level.creeps {
@@ -1037,7 +1056,7 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 			continue
 		}
 
-		drawn += g.renderSprite(c.x, c.y, 0, 0, 0, 1.0, 1.0, c.sprites[c.frame], screen)
+		drawn += g.renderSprite(c.x, c.y, 0, 0, 0, 1.0, g.colorScale(c.x, c.y), 1.0, c.sprites[c.frame], screen)
 		if c.frames > 1 && time.Since(c.lastFrame) >= 75*time.Millisecond {
 			c.frame++
 			if c.frame == c.frames {
@@ -1048,7 +1067,7 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 	}
 
 	for _, p := range g.projectiles {
-		drawn += g.renderSprite(p.x, p.y, 0, 0, p.angle, 1.0, 1.0, bulletImage, screen)
+		drawn += g.renderSprite(p.x, p.y, 0, 0, p.angle, 1.0, g.colorScale(p.x, p.y), 1.0, bulletImage, screen)
 	}
 
 	repelTime := g.player.garlicUntil.Sub(time.Now())
@@ -1059,7 +1078,7 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 		if repelTime.Seconds() < 3 {
 			alpha = repelTime.Seconds() / 12
 		}
-		drawn += g.renderSprite(g.player.x+0.25, g.player.y+0.25, -offset, -offset, 0, scale, alpha, g.garlicImage, screen)
+		drawn += g.renderSprite(g.player.x+0.25, g.player.y+0.25, -offset, -offset, 0, scale, 1.0, alpha, g.garlicImage, screen)
 	}
 
 	holyWaterTime := g.player.holyWaterUntil.Sub(time.Now())
@@ -1070,7 +1089,7 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 		if holyWaterTime.Seconds() < 3 {
 			alpha = holyWaterTime.Seconds() / 2
 		}
-		drawn += g.renderSprite(g.player.x+0.25, g.player.y+0.25, -offset, -offset, 0, scale, alpha, g.holyWaterImage, screen)
+		drawn += g.renderSprite(g.player.x+0.25, g.player.y+0.25, -offset, -offset, 0, scale, 1.0, alpha, g.holyWaterImage, screen)
 	}
 
 	playerSprite := g.ojasSS.Frame1
@@ -1083,17 +1102,26 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 		weaponSprite = g.player.weapon.sprite
 		mul = -1
 	}
-	drawn += g.renderSprite(g.player.x, g.player.y, 0, 0, playerAngle, 1.0, 1.0, playerSprite, screen)
+	drawn += g.renderSprite(g.player.x, g.player.y, 0, 0, playerAngle, 1.0, 1.0, 1.0, playerSprite, screen)
 	if g.player.weapon != nil {
-		drawn += g.renderSprite(g.player.x, g.player.y, 11*mul, 9, playerAngle, 1.0, 1.0, weaponSprite, screen)
+		drawn += g.renderSprite(g.player.x, g.player.y, 11*mul, 9, playerAngle, 1.0, 1.0, 1.0, weaponSprite, screen)
 	}
 
 	flashDuration := 40 * time.Millisecond
 	if time.Since(g.player.weapon.lastFire) < flashDuration {
-		drawn += g.renderSprite(g.player.x, g.player.y, 39, -1, g.player.angle, 1.0, 1.0, flashImage, screen)
+		drawn += g.renderSprite(g.player.x, g.player.y, 39, -1, g.player.angle, 1.0, 1.0, 1.0, flashImage, screen)
 	}
 
 	return drawn
+}
+
+func (g *game) resetExpiredTimers() {
+	if !g.player.garlicUntil.IsZero() && g.player.garlicUntil.Sub(time.Now()) <= 0 {
+		g.player.garlicUntil = time.Time{}
+	}
+	if !g.player.holyWaterUntil.IsZero() && g.player.holyWaterUntil.Sub(time.Now()) <= 0 {
+		g.player.holyWaterUntil = time.Time{}
+	}
 }
 
 func (g *game) playSound(sound int, volume float64) error {
