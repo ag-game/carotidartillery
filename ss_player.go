@@ -8,6 +8,8 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
+var ojasSS *PlayerSpriteSheet
+
 // PlayerSpriteSheet represents a collection of sprite images.
 type PlayerSpriteSheet struct {
 	Frame1 *ebiten.Image

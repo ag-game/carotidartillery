@@ -94,10 +94,6 @@ type game struct {
 
 	projectiles []*projectile
 
-	batSS *BatSpriteSheet
-
-	ojasSS *PlayerSpriteSheet
-
 	overlayImg *ebiten.Image
 	op         *ebiten.DrawImageOptions
 
@@ -160,6 +156,8 @@ func NewGame() (*game, error) {
 }
 
 func (g *game) flashMessage(message string) {
+	log.Println(message)
+
 	g.flashMessageText = message
 	g.flashMessageUntil = time.Now().Add(3 * time.Second)
 }
@@ -167,12 +165,12 @@ func (g *game) flashMessage(message string) {
 func (g *game) loadAssets() error {
 	var err error
 	// Load SpriteSheets.
-	g.ojasSS, err = LoadPlayerSpriteSheet()
+	ojasSS, err = LoadPlayerSpriteSheet()
 	if err != nil {
 		return fmt.Errorf("failed to load embedded spritesheet: %s", err)
 	}
 
-	g.batSS, err = LoadBatSpriteSheet()
+	batSS, err = LoadBatSpriteSheet()
 	if err != nil {
 		return fmt.Errorf("failed to load embedded spritesheet: %s", err)
 	}
@@ -199,44 +197,6 @@ func (g *game) newItem(itemType int) *gameItem {
 	}
 }
 
-func (g *game) newCreep(creepType int) *gameCreep {
-	sprites := []*ebiten.Image{
-		imageAtlas[ImageVampire1],
-		imageAtlas[ImageVampire2],
-		imageAtlas[ImageVampire3],
-		imageAtlas[ImageVampire2],
-	}
-	if creepType == TypeBat {
-		sprites = []*ebiten.Image{
-			g.batSS.Frame1,
-			g.batSS.Frame2,
-			g.batSS.Frame3,
-			g.batSS.Frame4,
-			g.batSS.Frame5,
-			g.batSS.Frame6,
-			g.batSS.Frame7,
-		}
-	}
-
-	startingFrame := 0
-	if len(sprites) > 1 {
-		startingFrame = rand.Intn(len(sprites))
-	}
-
-	x, y := g.level.newSpawnLocation()
-	return &gameCreep{
-		creepType: creepType,
-		x:         x,
-		y:         y,
-		sprites:   sprites,
-		frames:    len(sprites),
-		frame:     startingFrame,
-		level:     g.level,
-		player:    g.player,
-		health:    1,
-	}
-}
-
 func (g *game) nextLevel() error {
 	g.levelNum++
 	if g.levelNum > 13 {
@@ -255,11 +215,10 @@ func (g *game) generateLevel() error {
 	}
 
 	var err error
-	g.level, err = NewLevel(g.levelNum)
+	g.level, err = NewLevel(g.levelNum, g.player)
 	if err != nil {
 		return fmt.Errorf("failed to create new level: %s", err)
 	}
-	g.level.player = g.player
 
 	// Position player.
 	for {
@@ -273,20 +232,10 @@ func (g *game) generateLevel() error {
 
 	// Spawn items.
 	g.level.items = nil
-	added := make(map[string]bool)
 	for i := 0; i < spawnGarlic; i++ {
 		itemType := itemTypeGarlic
 		c := g.newItem(itemType)
-
-		addedItem := fmt.Sprintf("%0.0f-%0.0f", c.x, c.y)
-		if added[addedItem] {
-			// Already added a gameItem here.
-			i--
-			continue
-		}
-
 		g.level.items = append(g.level.items, c)
-		added[addedItem] = true
 	}
 	// Spawn starting garlic.
 	item := g.newItem(itemTypeGarlic)
@@ -305,20 +254,8 @@ func (g *game) generateLevel() error {
 	g.level.items = append(g.level.items, item)
 
 	// Spawn creeps.
-	g.level.creeps = make([]*gameCreep, spawnVampire)
 	for i := 0; i < spawnVampire; i++ {
-		creepType := TypeVampire
-		c := g.newCreep(creepType)
-
-		addedCreep := fmt.Sprintf("%0.0f-%0.0f", c.x, c.y)
-		if added[addedCreep] {
-			// Already added a gameCreep here.
-			i--
-			continue
-		}
-
-		g.level.creeps[i] = c
-		added[addedCreep] = true
+		g.level.addCreep(TypeVampire)
 	}
 	return nil
 }
@@ -434,6 +371,11 @@ func (g *game) Update() error {
 
 		c.Update()
 
+		if c.creepType == TypeTorch {
+			continue
+		}
+
+		// TODO can this move into creep?
 		cx, cy := c.Position()
 		dx, dy := deltaXY(g.player.x, g.player.y, cx, cy)
 		if dx <= biteThreshold && dy <= biteThreshold {
@@ -565,7 +507,7 @@ func (g *game) Update() error {
 		dx, dy := deltaXY(g.player.x, g.player.y, item.x, item.y)
 		if dx <= 1 && dy <= 1 {
 			item.health = 0
-			g.player.score += item.useScore()
+			g.player.score += item.useScore() * g.levelNum
 
 			if item.itemType == itemTypeGarlic {
 				g.playSound(SoundMunch, munchVolume)
@@ -613,9 +555,14 @@ UPDATEPROJECTILES:
 				continue
 			}
 
+			threshold := bulletHitThreshold
+			if c.creepType == TypeTorch {
+				threshold = 1
+			}
+
 			cx, cy := c.Position()
 			dx, dy := deltaXY(p.x, p.y, cx, cy)
-			if dx > bulletHitThreshold || dy > bulletHitThreshold {
+			if dx > threshold || dy > threshold {
 				continue
 			}
 
@@ -663,7 +610,7 @@ UPDATEPROJECTILES:
 	if g.tick%200 == 0 {
 		removed = 0
 		for i, creep := range g.level.creeps {
-			if creep.health != 0 {
+			if creep.health != 0 || creep.creepType == TypeTorch {
 				continue
 			}
 
@@ -679,7 +626,7 @@ UPDATEPROJECTILES:
 		g.level.items = append(g.level.items, item)
 
 		if g.debugMode {
-			log.Println("SPAWN GARLIC")
+			g.flashMessage("SPAWN GARLIC")
 		}
 	}
 
@@ -689,7 +636,7 @@ UPDATEPROJECTILES:
 		g.level.items = append(g.level.items, item)
 
 		if g.debugMode {
-			log.Println("SPAWN HOLY WATER")
+			g.flashMessage("SPAWN HOLY WATER")
 		}
 	}
 
@@ -701,13 +648,10 @@ UPDATEPROJECTILES:
 				spawnAmount *= 4
 			}
 			if g.debugMode && spawnAmount > 0 {
-				log.Printf("SPAWN %d VAMPIRES", spawnAmount)
+				g.flashMessage(fmt.Sprintf("SPAWN %d VAMPIRES", spawnAmount))
 			}
 			for i := 0; i < spawnAmount; i++ {
-				creepType := TypeVampire
-				c := g.newCreep(creepType)
-
-				g.level.creeps = append(g.level.creeps, c)
+				g.level.addCreep(TypeVampire)
 			}
 		}
 
@@ -721,13 +665,27 @@ UPDATEPROJECTILES:
 			}
 			spawnAmount = rand.Intn(spawnAmount)
 			if g.debugMode && spawnAmount > 0 {
-				log.Printf("SPAWN %d BATS", spawnAmount)
+				g.flashMessage(fmt.Sprintf("SPAWN %d BATS", spawnAmount))
 			}
 			for i := 0; i < spawnAmount; i++ {
-				creepType := TypeBat
-				c := g.newCreep(creepType)
+				g.level.addCreep(TypeBat)
+			}
+		}
 
-				g.level.creeps = append(g.level.creeps, c)
+		// Spawn ghosts.
+		if g.tick%1872 == 0 {
+			spawnAmount := g.tick / 1872
+			if spawnAmount < 1 {
+				spawnAmount = 1
+			} else if spawnAmount > 6 {
+				spawnAmount = 6
+			}
+			spawnAmount = rand.Intn(spawnAmount)
+			if g.debugMode && spawnAmount > 0 {
+				g.flashMessage(fmt.Sprintf("SPAWN %d GHOSTS", spawnAmount))
+			}
+			for i := 0; i < spawnAmount; i++ {
+				g.level.addCreep(TypeGhost)
 			}
 		}
 	}
@@ -751,6 +709,12 @@ UPDATEPROJECTILES:
 	if inpututil.IsKeyJustPressed(ebiten.KeyH) {
 		g.player.holyWaters++
 		g.flashMessage("+ HOLY WATER")
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyControl) && inpututil.IsKeyJustPressed(ebiten.Key2) {
+		for i := 0; i < 13; i++ {
+			g.level.addCreep(TypeGhost)
+		}
+		g.flashMessage("+ GHOST")
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyControl) && inpututil.IsKeyJustPressed(ebiten.Key6) {
 		g.fullBrightMode = !g.fullBrightMode
@@ -777,7 +741,6 @@ UPDATEPROJECTILES:
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyP) {
 		if g.cpuProfile == nil {
-			log.Println("CPU profiling started...")
 			g.flashMessage("CPU PROFILING STARTED")
 
 			homeDir, err := os.UserHomeDir()
@@ -792,7 +755,6 @@ UPDATEPROJECTILES:
 				return err
 			}
 		} else {
-			log.Println("Profiling stopped")
 			g.flashMessage("CPU PROFILING STOPPED")
 
 			pprof.StopCPUProfile()
@@ -899,6 +861,10 @@ func (g *game) tilePosition(x, y float64) (float64, float64) {
 
 // renderSprite renders a sprite on the screen.
 func (g *game) renderSprite(x float64, y float64, offsetx float64, offsety float64, angle float64, scale float64, colorScale float64, alpha float64, sprite *ebiten.Image, target *ebiten.Image) int {
+	if alpha <= .01 || colorScale <= .01 {
+		return 0
+	}
+
 	x, y = g.tilePosition(x, y)
 
 	// Skip drawing off-screen tiles.
@@ -939,27 +905,13 @@ func (g *game) colorScale(x, y float64) float64 {
 		return 1
 	}
 
-	dx, dy := deltaXY(x, y, g.player.x, g.player.y)
+	v := colorScaleValue(x, y, g.player.x, g.player.y)
 
-	sD := 7 / (dx + dy)
-	if sD > 1 {
-		sD = 1
-	}
+	tileV := g.level.Tile(int(x), int(y)).colorScale
 
-	sDB := sD
-	if dx > 4 {
-		sDB *= 0.6 / (dx / 4)
-	}
-	if dy > 4 {
-		sDB *= 0.6 / (dy / 4)
-	}
+	s := math.Min(1, v+tileV)
 
-	sD = sD * 2 * sDB
-	if sD > 1 {
-		sD = 1
-	}
-
-	return sD
+	return s
 }
 
 // renderLevel draws the current Level on the screen.
@@ -989,11 +941,11 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 	}
 
 	for _, c := range g.level.creeps {
-		if c.health == 0 {
+		if c.health == 0 && c.creepType != TypeTorch {
 			continue
 		}
 
-		drawn += g.renderSprite(c.x, c.y, 0, 0, 0, 1.0, g.colorScale(c.x, c.y), 1.0, c.sprites[c.frame], screen)
+		drawn += g.renderSprite(c.x, c.y, 0, 0, c.angle, 1.0, g.colorScale(c.x, c.y), 1.0, c.sprites[c.frame], screen)
 		if c.frames > 1 && time.Since(c.lastFrame) >= 75*time.Millisecond {
 			c.frame++
 			if c.frame == c.frames {
@@ -1029,17 +981,18 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 		drawn += g.renderSprite(g.player.x+0.25, g.player.y+0.25, -offset, -offset, 0, scale, 1.0, alpha, imageAtlas[ImageHolyWater], screen)
 	}
 
-	playerSprite := g.ojasSS.Frame1
+	playerSprite := ojasSS.Frame1
 	playerAngle := g.player.angle
 	weaponSprite := g.player.weapon.spriteFlipped
 	mul := float64(1)
 	if g.player.angle > math.Pi/2 || g.player.angle < -1*math.Pi/2 {
-		playerSprite = g.ojasSS.Frame2
+		playerSprite = ojasSS.Frame2
 		playerAngle = playerAngle - math.Pi
 		weaponSprite = g.player.weapon.sprite
 		mul = -1
 	}
 	drawn += g.renderSprite(g.player.x, g.player.y, 0, 0, playerAngle, 1.0, 1.0, 1.0, playerSprite, screen)
+	drawn += g.renderSprite(g.player.x, g.player.y, -10*mul, 2, playerAngle, 1.0, 1.0, 1.0, sandstoneSS.TorchMulti, screen)
 	if g.player.weapon != nil {
 		drawn += g.renderSprite(g.player.x, g.player.y, 11*mul, 9, playerAngle, 1.0, 1.0, 1.0, weaponSprite, screen)
 	}
@@ -1086,7 +1039,18 @@ func (g *game) hurtCreep(c *gameCreep, damage int) error {
 	}
 
 	// Killed creep.
-	g.player.score += c.killScore()
+	g.player.score += c.killScore() * g.levelNum
+
+	if c.creepType == TypeTorch {
+		// TODO play break sound
+		c.frames = 1
+		c.frame = 0
+		c.sprites = []*ebiten.Image{
+			sandstoneSS.TorchTop9,
+		}
+		g.level.bakePartialLightmap(int(c.x), int(c.y))
+		return nil
+	}
 
 	// Play vampire die sound.
 

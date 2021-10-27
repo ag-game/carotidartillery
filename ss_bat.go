@@ -7,6 +7,8 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
+var batSS *BatSpriteSheet
+
 // BatSpriteSheet represents a collection of sprite images.
 type BatSpriteSheet struct {
 	Frame1 *ebiten.Image

@@ -23,6 +23,8 @@ type Level struct {
 	liveCreeps int
 
 	player *gamePlayer
+
+	torches []*gameCreep
 }
 
 // Tile returns the tile at the provided coordinates, or nil.
@@ -97,7 +99,7 @@ SPAWNLOCATION:
 }
 
 // NewLevel returns a new randomly generated Level.
-func NewLevel(levelNum int) (*Level, error) {
+func NewLevel(levelNum int, p *gamePlayer) (*Level, error) {
 	multiplier := levelNum
 	if multiplier > 2 {
 		multiplier = 2
@@ -106,9 +108,11 @@ func NewLevel(levelNum int) (*Level, error) {
 		w:        336 * multiplier,
 		h:        336 * multiplier,
 		tileSize: 32,
+		player:   p,
 	}
 
-	sandstoneSS, err := LoadEnvironmentSpriteSheet()
+	var err error
+	sandstoneSS, err = LoadEnvironmentSpriteSheet()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load embedded spritesheet: %s", err)
 	}
@@ -198,6 +202,10 @@ func NewLevel(levelNum int) (*Level, error) {
 				case spriteTop:
 					if !bottomLeft || !bottomRight || left || right {
 						neighbor.AddSprite(sandstoneSS.WallPillar)
+						c := newCreep(TypeTorch, l, l.player)
+						c.x, c.y = float64(nx), float64(ny)
+						l.creeps = append(l.creeps, c)
+						l.torches = append(l.torches, c)
 					} else {
 						neighbor.AddSprite(sandstoneSS.WallTop)
 					}
@@ -222,9 +230,74 @@ func NewLevel(levelNum int) (*Level, error) {
 		}
 	}
 
+	l.bakeLightmap()
+
 	return l, nil
+}
+
+func (l *Level) bakeLightmap() {
+	for x := 0; x < l.w; x++ {
+		for y := 0; y < l.h; y++ {
+			t := l.tiles[y][x]
+			v := 0.0
+			for _, torch := range l.torches {
+				if torch.health == 0 {
+					continue
+				}
+				torchV := colorScaleValue(float64(x), float64(y), torch.x, torch.y)
+				v += torchV
+			}
+			t.colorScale = v
+		}
+	}
+}
+
+func (l *Level) bakePartialLightmap(lx, ly int) {
+	radius := 16
+	for x := lx - radius; x < lx+radius; x++ {
+		for y := ly - radius; y < ly+radius; y++ {
+			t := l.Tile(x, y)
+			if t == nil {
+				continue
+			}
+			v := 0.0
+			for _, torch := range l.torches {
+				if torch.health == 0 {
+					continue
+				}
+				torchV := colorScaleValue(float64(x), float64(y), torch.x, torch.y)
+				v += torchV
+			}
+			t.colorScale = v
+		}
+	}
+}
+
+func (l *Level) addCreep(creepType int) {
+	c := newCreep(creepType, l, l.player)
+	l.creeps = append(l.creeps, c)
 }
 
 func angle(x1, y1, x2, y2 float64) float64 {
 	return math.Atan2(y1-y2, x1-x2)
+}
+
+func colorScaleValue(x, y, bx, by float64) float64 {
+	dx, dy := deltaXY(x, y, bx, by)
+	sD := 7 / (dx + dy)
+	if sD > 1 {
+		sD = 1
+	}
+	sDB := sD
+	if dx > 4 {
+		sDB *= 0.6 / (dx / 4)
+	}
+	if dy > 4 {
+		sDB *= 0.6 / (dy / 4)
+	}
+	sD = sD * 2 * sDB
+	if sD > 1 {
+		sD = 1
+	}
+	return sD
 }

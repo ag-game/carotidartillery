@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"math"
 	"math/rand"
 	"sync"
@@ -13,6 +14,7 @@ const (
 	TypeVampire = iota
 	TypeBat
 	TypeGhost
+	TypeTorch
 )
 
 type gameCreep struct {
@@ -36,7 +38,62 @@ type gameCreep struct {
 
 	health int
 
+	angle float64
+
 	sync.Mutex
+}
+
+func newCreep(creepType int, l *Level, p *gamePlayer) *gameCreep {
+	sprites := []*ebiten.Image{
+		imageAtlas[ImageVampire1],
+		imageAtlas[ImageVampire2],
+		imageAtlas[ImageVampire3],
+		imageAtlas[ImageVampire2],
+	}
+	if creepType == TypeBat {
+		sprites = []*ebiten.Image{
+			batSS.Frame1,
+			batSS.Frame2,
+			batSS.Frame3,
+			batSS.Frame4,
+			batSS.Frame5,
+			batSS.Frame6,
+			batSS.Frame7,
+		}
+	} else if creepType == TypeGhost {
+		sprites = []*ebiten.Image{
+			imageAtlas[ImageGhost1],
+		}
+	} else if creepType == TypeTorch {
+		sprites = []*ebiten.Image{
+			sandstoneSS.TorchTop1,
+			sandstoneSS.TorchTop2,
+			sandstoneSS.TorchTop3,
+			sandstoneSS.TorchTop4,
+			sandstoneSS.TorchTop5,
+			sandstoneSS.TorchTop6,
+			sandstoneSS.TorchTop7,
+			sandstoneSS.TorchTop8,
+		}
+	}
+
+	startingFrame := 0
+	if len(sprites) > 1 {
+		startingFrame = rand.Intn(len(sprites))
+	}
+
+	x, y := l.newSpawnLocation()
+	return &gameCreep{
+		creepType: creepType,
+		x:         x,
+		y:         y,
+		sprites:   sprites,
+		frames:    len(sprites),
+		frame:     startingFrame,
+		level:     l,
+		player:    p,
+		health:    1,
+	}
 }
 
 func (c *gameCreep) queueNextAction() {
@@ -100,6 +157,22 @@ func (c *gameCreep) doNextAction() {
 	randMovementA := (rand.Float64() - 0.5) / 12
 	randMovementB := (rand.Float64() - 0.5) / 12
 
+	if c.creepType == TypeGhost {
+		c.angle = angle(c.x, c.y, c.player.x, c.player.y)
+
+		// TODO optimize
+		if c.angle > math.Pi/2 || c.angle < -1*math.Pi/2 {
+			c.sprites = []*ebiten.Image{
+				imageAtlas[ImageGhost1R],
+			}
+			c.angle = c.angle - math.Pi
+		} else {
+			c.sprites = []*ebiten.Image{
+				imageAtlas[ImageGhost1],
+			}
+		}
+	}
+
 	repelled := c.repelled()
 	if !repelled && rand.Intn(13) == 0 {
 		c.seekPlayer()
@@ -125,6 +198,54 @@ func (c *gameCreep) repelled() bool {
 	return repelled
 }
 
+// TODO return true when creep is facing player and player is facing creep
+func (c *gameCreep) facingPlayer() bool {
+	mod := func(v float64) float64 {
+		for v > math.Pi {
+			v -= math.Pi
+		}
+		for v < math.Pi*-1 {
+			v += math.Pi
+		}
+		return v
+	}
+	_ = mod
+
+	ca := math.Remainder(c.angle, math.Pi)
+	ca = math.Remainder(ca, -math.Pi)
+	if ca < 0 {
+		ca = math.Pi + ca
+	}
+	ca = c.angle
+	if ca < 0 {
+		ca = math.Pi*2 + ca
+	}
+	pa := math.Remainder(c.player.angle, math.Pi)
+	pa = math.Remainder(pa, -math.Pi)
+	if pa < 0 {
+		pa = math.Pi + pa
+	}
+	pa = c.player.angle
+	if pa < 0 {
+		pa = math.Pi*2 + pa
+	}
+
+	a := ca - pa
+	if pa > ca {
+		a = pa - ca
+	}
+
+	if rand.Intn(70) == 0 {
+		// TODO
+		log.Println(ca, pa, a)
+	}
+
+	return a < 2
+	//a2 := c.player.angle - c.angle
+	// TODO
+	//return a > math.Pi/2*-1 && a2 > math.Pi/2*-1 && a < math.Pi/2 && a2 < math.Pi/2
+}
+
 func (c *gameCreep) Update() {
 	c.Lock()
 	defer c.Unlock()
@@ -133,9 +254,17 @@ func (c *gameCreep) Update() {
 		return
 	}
 
+	if c.creepType == TypeTorch {
+		return
+	}
+
 	c.tick++
 
 	repelled := c.repelled()
+
+	if c.creepType == TypeGhost && c.facingPlayer() {
+		return
+	}
 
 	dx, dy := deltaXY(c.x, c.y, c.player.x, c.player.y)
 	seekDistance := 2.0
@@ -191,7 +320,7 @@ func (c *gameCreep) killScore() int {
 	case TypeBat:
 		return 125
 	case TypeGhost:
-		return 75
+		return 150
 	default:
 		return 0
 	}

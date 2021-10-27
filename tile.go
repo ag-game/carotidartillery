@@ -7,9 +7,10 @@ import (
 // Tile represents a space with an x,y coordinate within a Level. Any number of
 // sprites may be added to a Tile.
 type Tile struct {
-	sprites []*ebiten.Image
-	floor   bool
-	wall    bool
+	sprites    []*ebiten.Image
+	floor      bool
+	wall       bool
+	colorScale float64 // Minimum color scale (brightness)
 }
 
 // AddSprite adds a sprite to the Tile.

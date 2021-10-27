@@ -11,6 +11,10 @@ const (
 	ImageVampire1 = iota
 	ImageVampire2
 	ImageVampire3
+	ImageGhost1
+	ImageGhost1R
+	ImageGhost2
+	ImageGhost2R
 	ImageGarlic
 	ImageHolyWater
 	ImageHeart
@@ -23,6 +27,10 @@ var imageMap = map[int]string{
 	ImageVampire1:    "assets/creeps/vampire/vampire1.png",
 	ImageVampire2:    "assets/creeps/vampire/vampire2.png",
 	ImageVampire3:    "assets/creeps/vampire/vampire3.png",
+	ImageGhost1:      "assets/creeps/ghost/ghost1.png",
+	ImageGhost1R:     "assets/creeps/ghost/ghost1r.png",
+	ImageGhost2:      "assets/creeps/ghost/ghost2.png",
+	ImageGhost2R:     "assets/creeps/ghost/ghost2r.png",
 	ImageGarlic:      "assets/items/garlic.png",
 	ImageHolyWater:   "assets/items/holywater.png",
 	ImageHeart:       "assets/ui/heart.png",
