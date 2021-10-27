@@ -277,11 +277,11 @@ func (c *gameCreep) Update() {
 	}
 
 	x, y := c.x+c.moveX, c.y+c.moveY
-	if c.level.isFloor(x, y, false) {
+	if c.level.isFloor(x, y) {
 		c.x, c.y = x, y
-	} else if c.level.isFloor(x, c.y, false) {
+	} else if c.level.isFloor(x, c.y) {
 		c.x = x
-	} else if c.level.isFloor(c.x, y, false) {
+	} else if c.level.isFloor(c.x, y) {
 		c.y = y
 	} else {
 		c.nextAction = 0

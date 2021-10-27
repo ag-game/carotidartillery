@@ -40,27 +40,15 @@ func (l *Level) Size() (width, height int) {
 	return l.w, l.h
 }
 
-func (l *Level) isFloor(x float64, y float64, exact bool) bool {
-	offsetA := .25
-	offsetB := .75
-	if exact {
-		offsetA = 0
-		offsetB = 0
-	}
-
-	t := l.Tile(int(x+offsetA), int(y+offsetA))
+func (l *Level) isFloor(x float64, y float64) bool {
+	t := l.Tile(int(math.Floor(x+.5)), int(math.Floor(y+.5)))
 	if t == nil {
 		return false
 	}
 	if !t.floor {
 		return false
 	}
-
-	t = l.Tile(int(x+offsetB), int(y+offsetB))
-	if t == nil {
-		return false
-	}
-	return t.floor
+	return true
 }
 
 func (l *Level) newSpawnLocation() (float64, float64) {
@@ -69,7 +57,7 @@ SPAWNLOCATION:
 		x := float64(1 + rand.Intn(l.w-2))
 		y := float64(1 + rand.Intn(l.h-2))
 
-		if !l.isFloor(x, y, false) {
+		if !l.isFloor(x, y) {
 			continue
 		}
 

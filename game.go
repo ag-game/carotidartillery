@@ -65,10 +65,11 @@ var startButtons = []ebiten.StandardGamepadButton{
 }
 
 type projectile struct {
-	x, y  float64
-	angle float64
-	speed float64
-	color color.Color
+	x, y       float64
+	angle      float64
+	speed      float64
+	color      color.Color
+	colorScale float64
 }
 
 // game is an isometric demo game.
@@ -225,7 +226,7 @@ func (g *game) generateLevel() error {
 		g.player.x = float64(rand.Intn(g.level.w))
 		g.player.y = float64(rand.Intn(g.level.h))
 
-		if g.level.isFloor(g.player.x, g.player.y, false) {
+		if g.level.isFloor(g.player.x, g.player.y) {
 			break
 		}
 	}
@@ -245,7 +246,7 @@ func (g *game) generateLevel() error {
 		startingGarlicX := g.player.x + 2 + garlicOffsetA
 		startingGarlicY := g.player.y + 2 + garlicOffsetB
 
-		if g.level.isFloor(startingGarlicX, startingGarlicY, false) {
+		if g.level.isFloor(startingGarlicX, startingGarlicY) {
 			item.x = startingGarlicX
 			item.y = startingGarlicY
 			break
@@ -491,11 +492,11 @@ func (g *game) Update() error {
 		}
 	}
 
-	if g.noclipMode || g.level.isFloor(px, py, false) {
+	if g.noclipMode || g.level.isFloor(px, py) {
 		g.player.x, g.player.y = px, py
-	} else if g.level.isFloor(px, g.player.y, false) {
+	} else if g.level.isFloor(px, g.player.y) {
 		g.player.x = px
-	} else if g.level.isFloor(g.player.x, py, false) {
+	} else if g.level.isFloor(g.player.x, py) {
 		g.player.y = py
 	}
 
@@ -543,26 +544,40 @@ func (g *game) Update() error {
 	}
 
 	// Update boolets.
-	bulletHitThreshold := 0.5
+	bulletHitThreshold := 0.501
 	removed := 0
 UPDATEPROJECTILES:
 	for i, p := range g.projectiles {
-		p.x += math.Cos(p.angle) * p.speed
-		p.y += math.Sin(p.angle) * p.speed
+		if p.speed == 0 {
+			continue
+		}
+		speed := p.speed
+		for {
+			bx := p.x + math.Cos(p.angle)*speed
+			by := p.y + math.Sin(p.angle)*speed
+
+			if g.level.isFloor(bx, by) {
+				p.x, p.y = bx, by
+				break
+			}
+
+			speed *= .25
+			if speed < .001 {
+				// Remove projectile
+				p.speed = 0
+				p.colorScale = .01
+				continue UPDATEPROJECTILES
+			}
+		}
 
 		for _, c := range g.level.creeps {
 			if c.health == 0 {
 				continue
 			}
 
-			threshold := bulletHitThreshold
-			if c.creepType == TypeTorch {
-				threshold = 1
-			}
-
 			cx, cy := c.Position()
 			dx, dy := deltaXY(p.x, p.y, cx, cy)
-			if dx > threshold || dy > threshold {
+			if dx > bulletHitThreshold || dy > bulletHitThreshold {
 				continue
 			}
 
@@ -577,23 +592,17 @@ UPDATEPROJECTILES:
 
 			continue UPDATEPROJECTILES
 		}
-
-		if !g.level.isFloor(p.x, p.y, true) {
-			// Remove projectile
-			g.projectiles = append(g.projectiles[:i-removed], g.projectiles[i-removed+1:]...)
-			removed++
-			// TODO Add bullet hole
-		}
 	}
 
 	// Fire boolets.
 	if fire && time.Since(g.player.weapon.lastFire) >= g.player.weapon.cooldown {
 		p := &projectile{
-			x:     g.player.x,
-			y:     g.player.y,
-			angle: g.player.angle,
-			speed: 0.35,
-			color: colornames.Yellow,
+			x:          g.player.x,
+			y:          g.player.y,
+			angle:      g.player.angle,
+			speed:      0.35,
+			color:      colornames.Yellow,
+			colorScale: 1.0,
 		}
 		g.projectiles = append(g.projectiles, p)
 
@@ -861,7 +870,7 @@ func (g *game) tilePosition(x, y float64) (float64, float64) {
 
 // renderSprite renders a sprite on the screen.
 func (g *game) renderSprite(x float64, y float64, offsetx float64, offsety float64, angle float64, scale float64, colorScale float64, alpha float64, sprite *ebiten.Image, target *ebiten.Image) int {
-	if alpha <= .01 || colorScale <= .01 {
+	if alpha < .01 || colorScale < .01 {
 		return 0
 	}
 
@@ -956,7 +965,12 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 	}
 
 	for _, p := range g.projectiles {
-		drawn += g.renderSprite(p.x, p.y, 0, 0, p.angle, 1.0, g.colorScale(p.x, p.y), 1.0, imageAtlas[ImageBullet], screen)
+		colorScale := p.colorScale
+		if colorScale == 1 {
+			colorScale = g.colorScale(p.x, p.y)
+		}
+
+		drawn += g.renderSprite(p.x, p.y, 0, 0, p.angle, 1.0, colorScale, 1.0, imageAtlas[ImageBullet], screen)
 	}
 
 	repelTime := g.player.garlicUntil.Sub(time.Now())
@@ -992,10 +1006,10 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 		mul = -1
 	}
 	drawn += g.renderSprite(g.player.x, g.player.y, 0, 0, playerAngle, 1.0, 1.0, 1.0, playerSprite, screen)
-	drawn += g.renderSprite(g.player.x, g.player.y, -10*mul, 2, playerAngle, 1.0, 1.0, 1.0, sandstoneSS.TorchMulti, screen)
 	if g.player.weapon != nil {
 		drawn += g.renderSprite(g.player.x, g.player.y, 11*mul, 9, playerAngle, 1.0, 1.0, 1.0, weaponSprite, screen)
 	}
+	drawn += g.renderSprite(g.player.x, g.player.y, -10*mul, 2, playerAngle, 1.0, 1.0, 1.0, sandstoneSS.TorchMulti, screen)
 
 	flashDuration := 40 * time.Millisecond
 	if time.Since(g.player.weapon.lastFire) < flashDuration {
