@@ -50,6 +50,7 @@ func newCreep(creepType int, l *Level, p *gamePlayer) *gameCreep {
 		imageAtlas[ImageVampire3],
 		imageAtlas[ImageVampire2],
 	}
+	startingHealth := 1
 	if creepType == TypeBat {
 		sprites = []*ebiten.Image{
 			batSS.Frame1,
@@ -60,10 +61,12 @@ func newCreep(creepType int, l *Level, p *gamePlayer) *gameCreep {
 			batSS.Frame6,
 			batSS.Frame7,
 		}
+		startingHealth = 2
 	} else if creepType == TypeGhost {
 		sprites = []*ebiten.Image{
 			imageAtlas[ImageGhost1],
 		}
+		startingHealth = 1
 	} else if creepType == TypeTorch {
 		sprites = []*ebiten.Image{
 			sandstoneSS.TorchTop1,
@@ -82,7 +85,11 @@ func newCreep(creepType int, l *Level, p *gamePlayer) *gameCreep {
 		startingFrame = rand.Intn(len(sprites))
 	}
 
-	x, y := l.newSpawnLocation()
+	var x, y float64
+	if creepType != TypeTorch {
+		x, y = l.newSpawnLocation()
+	}
+
 	return &gameCreep{
 		creepType: creepType,
 		x:         x,
@@ -92,7 +99,7 @@ func newCreep(creepType int, l *Level, p *gamePlayer) *gameCreep {
 		frame:     startingFrame,
 		level:     l,
 		player:    p,
-		health:    1,
+		health:    startingHealth,
 	}
 }
 

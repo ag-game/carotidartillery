@@ -43,7 +43,7 @@ func LoadEnvironmentSpriteSheet() (*EnvironmentSpriteSheet, error) {
 	s := &EnvironmentSpriteSheet{}
 
 	// Dungeon sprites
-	dungeonFile, err := assetsFS.Open("assets/sandstone-dungeon/Tiles-SandstoneDungeons.png")
+	dungeonFile, err := assetsFS.Open("assets/sandstone-dungeon/Tiles-Sandstone-Dungeons.png")
 	if err != nil {
 		return nil, err
 	}

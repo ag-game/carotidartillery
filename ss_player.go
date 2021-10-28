@@ -8,7 +8,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
-var ojasSS *PlayerSpriteSheet
+var playerSS *PlayerSpriteSheet
 
 // PlayerSpriteSheet represents a collection of sprite images.
 type PlayerSpriteSheet struct {
@@ -23,7 +23,7 @@ var assetsFS embed.FS
 func LoadPlayerSpriteSheet() (*PlayerSpriteSheet, error) {
 	tileSize := 32
 
-	f, err := assetsFS.Open("assets/ojas-dungeon/character_run.png")
+	f, err := assetsFS.Open("assets/ojas-dungeon/character-run.png")
 	if err != nil {
 		return nil, err
 	}

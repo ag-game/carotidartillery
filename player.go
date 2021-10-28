@@ -4,12 +4,19 @@ import (
 	"time"
 )
 
+var weaponUzi = &playerWeapon{
+	sprite:   imageAtlas[ImageUzi],
+	cooldown: 100 * time.Millisecond,
+}
+
 type gamePlayer struct {
 	x, y float64
 
 	angle float64
 
 	weapon *playerWeapon
+
+	hasTorch bool
 
 	score int
 
@@ -25,11 +32,9 @@ type gamePlayer struct {
 
 func NewPlayer() (*gamePlayer, error) {
 	p := &gamePlayer{
-		weapon: &playerWeapon{
-			sprite:   imageAtlas[ImageUzi],
-			cooldown: 100 * time.Millisecond,
-		},
-		health: 3,
+		weapon:   weaponUzi,
+		hasTorch: true,
+		health:   3,
 	}
 	return p, nil
 }

@@ -32,11 +32,11 @@ var imageMap = map[int]string{
 	ImageGhost2:      "assets/creeps/ghost/ghost2.png",
 	ImageGhost2R:     "assets/creeps/ghost/ghost2r.png",
 	ImageGarlic:      "assets/items/garlic.png",
-	ImageHolyWater:   "assets/items/holywater.png",
+	ImageHolyWater:   "assets/items/holy-water.png",
 	ImageHeart:       "assets/ui/heart.png",
 	ImageUzi:         "assets/weapons/uzi.png",
 	ImageBullet:      "assets/weapons/bullet.png",
-	ImageMuzzleFlash: "assets/weapons/flash.png",
+	ImageMuzzleFlash: "assets/weapons/muzzle-flash.png",
 }
 
 var imageAtlas = loadAtlas()

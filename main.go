@@ -28,6 +28,8 @@ func main() {
 		log.Fatal(err)
 	}
 
+	parseFlags(g)
+
 	sigc := make(chan os.Signal, 1)
 	signal.Notify(sigc,
 		syscall.SIGINT,
