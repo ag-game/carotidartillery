@@ -141,8 +141,6 @@ func NewGame() (*game, error) {
 
 	g.audioContext = audio.NewContext(sampleRate)
 
-	ebiten.SetCursorShape(ebiten.CursorShapeCrosshair)
-
 	err := g.loadAssets()
 	if err != nil {
 		return nil, err
@@ -283,6 +281,8 @@ func (g *game) reset() error {
 	g.gameOverTime = time.Time{}
 	g.gameWon = false
 
+	g.updateCursor()
+
 	g.forceColorScale = -1
 
 	g.player.hasTorch = true
@@ -328,11 +328,12 @@ func (g *game) Layout(outsideWidth, outsideHeight int) (int, int) {
 }
 
 func (g *game) updateCursor() {
-	if g.activeGamepad == -1 || g.gameWon {
+	if g.activeGamepad != -1 || g.gameWon {
 		ebiten.SetCursorMode(ebiten.CursorModeHidden)
 		return
 	}
 	ebiten.SetCursorMode(ebiten.CursorModeVisible)
+	ebiten.SetCursorShape(ebiten.CursorShapeCrosshair)
 }
 
 // Update reads current user input and updates the game state.
@@ -734,6 +735,14 @@ UPDATEPROJECTILES:
 			g.flashMessage("GOD MODE ACTIVATED")
 		} else {
 			g.flashMessage("GOD MODE DEACTIVATED")
+		}
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyM) {
+		g.muteAudio = !g.muteAudio
+		if g.muteAudio {
+			g.flashMessage("AUDIO MUTED")
+		} else {
+			g.flashMessage("AUDIO UNMUTED")
 		}
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyN) {
@@ -1253,6 +1262,8 @@ func (g *game) showWinScreen() {
 	g.updateCursor()
 
 	g.player.health = 0
+	g.player.garlicUntil = time.Time{}
+	g.player.holyWaterUntil = time.Time{}
 
 	g.level = newWinLevel(g.player)
 
