@@ -28,7 +28,15 @@ func main() {
 		log.Fatal(err)
 	}
 
+	err = g.reset()
+	if err != nil {
+		panic(err)
+	}
+
 	parseFlags(g)
+	if !g.debugMode {
+		g.gameStartTime = time.Time{}
+	}
 
 	sigc := make(chan os.Signal, 1)
 	signal.Notify(sigc,

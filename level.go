@@ -25,6 +25,13 @@ type Level struct {
 	player *gamePlayer
 
 	torches []*gameCreep
+
+	enterX, enterY int
+	exitX, exitY   int
+
+	exitOpen bool
+
+	requiredSouls int
 }
 
 // Tile returns the tile at the provided coordinates, or nil.
@@ -99,6 +106,13 @@ func NewLevel(levelNum int, p *gamePlayer) (*Level, error) {
 		player:   p,
 	}
 
+	l.requiredSouls = 66
+	if levelNum == 2 {
+		l.requiredSouls = 666
+	} else if levelNum == 3 {
+		l.requiredSouls = 6666
+	}
+
 	var err error
 	sandstoneSS, err = LoadEnvironmentSpriteSheet()
 	if err != nil {
@@ -149,6 +163,8 @@ func NewLevel(levelNum int, p *gamePlayer) (*Level, error) {
 		return t.floor
 	}
 
+	var topWalls [][2]int
+
 	// Add walls.
 	for x := 0; x < l.w; x++ {
 		for y := 0; y < l.h; y++ {
@@ -196,6 +212,7 @@ func NewLevel(levelNum int, p *gamePlayer) (*Level, error) {
 						l.torches = append(l.torches, c)
 					} else {
 						neighbor.AddSprite(sandstoneSS.WallTop)
+						topWalls = append(topWalls, [2]int{nx, ny})
 					}
 				case spriteLeft:
 					if spriteBottom {
@@ -217,6 +234,27 @@ func NewLevel(levelNum int, p *gamePlayer) (*Level, error) {
 			}
 		}
 	}
+
+	entrance := topWalls[rand.Intn(len(topWalls))]
+	exit := entrance
+	for exit == entrance {
+		exit = topWalls[rand.Intn(len(topWalls))]
+	}
+
+	l.enterX, l.enterY = entrance[0], entrance[1]
+	l.exitX, l.exitY = exit[0], exit[1]
+
+	if levelNum > 1 {
+		l.Tile(l.enterX, l.enterY).sprites = nil
+		l.Tile(l.enterX, l.enterY).AddSprite(sandstoneSS.FloorA)
+		l.Tile(l.enterX, l.enterY).AddSprite(sandstoneSS.DoorClosed)
+	}
+
+	l.Tile(l.exitX, l.exitY).sprites = nil
+	l.Tile(l.exitX, l.exitY).AddSprite(sandstoneSS.FloorA)
+	l.Tile(l.exitX, l.exitY).AddSprite(sandstoneSS.DoorClosed)
+
+	// TODO special door for final exit
 
 	l.bakeLightmap()
 
@@ -261,9 +299,10 @@ func (l *Level) bakePartialLightmap(lx, ly int) {
 	}
 }
 
-func (l *Level) addCreep(creepType int) {
+func (l *Level) addCreep(creepType int) *gameCreep {
 	c := newCreep(creepType, l, l.player)
 	l.creeps = append(l.creeps, c)
+	return c
 }
 
 func angle(x1, y1, x2, y2 float64) float64 {

@@ -27,6 +27,7 @@ type OjasDungeonSpriteSheet struct {
 	Grass81 *ebiten.Image
 	Grass82 *ebiten.Image
 	Grass91 *ebiten.Image
+	Soul1   *ebiten.Image
 	Wall1   *ebiten.Image
 	Vent1   *ebiten.Image
 	Door11  *ebiten.Image
@@ -71,6 +72,7 @@ func LoadOjasDungeonSpriteSheet() (*OjasDungeonSpriteSheet, error) {
 	s.Grass81 = spriteAt(14, 11)
 	s.Grass82 = spriteAt(10, 14)
 	s.Grass91 = spriteAt(10, 15)
+	s.Soul1 = spriteAt(8, 11)
 	s.Wall1 = spriteAt(7, 5)
 	s.Vent1 = spriteAt(9, 13)
 	s.Door11 = spriteAt(3, 6)

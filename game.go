@@ -81,13 +81,15 @@ type game struct {
 
 	player *gamePlayer
 
-	requiredSouls int
-	spawnedPortal bool
-
 	gameStartTime time.Time
 
 	gameOverTime time.Time
 	gameWon      bool
+
+	winScreenBackground *ebiten.Image
+	winScreenSun        *ebiten.Image
+	winScreenSunY       float64
+	winScreenColorScale float64
 
 	camScale   float64
 	camScaleTo float64
@@ -135,6 +137,7 @@ func NewGame() (*game, error) {
 		mousePanY:       math.MinInt32,
 		activeGamepad:   -1,
 		forceColorScale: -1,
+		levelNum:        1,
 
 		op: &ebiten.DrawImageOptions{},
 	}
@@ -147,11 +150,6 @@ func NewGame() (*game, error) {
 	}
 
 	g.player, err = NewPlayer()
-	if err != nil {
-		return nil, err
-	}
-
-	err = g.reset()
 	if err != nil {
 		return nil, err
 	}
@@ -207,9 +205,12 @@ func (g *game) newItem(itemType int) *gameItem {
 }
 
 func (g *game) nextLevel() error {
+	g.player.soulsRescued = 0
+
 	g.levelNum++
-	if g.levelNum > 13 {
-		log.Fatal("YOU WIN")
+	if g.levelNum > 3 {
+		g.showWinScreen()
+		return nil
 	}
 	return g.generateLevel()
 }
@@ -230,12 +231,14 @@ func (g *game) generateLevel() error {
 	}
 
 	// Position player.
-	for {
-		g.player.x = float64(rand.Intn(g.level.w))
-		g.player.y = float64(rand.Intn(g.level.h))
-
-		if g.level.isFloor(g.player.x, g.player.y) {
-			break
+	if g.levelNum > 1 {
+		g.player.x, g.player.y = float64(g.level.enterX), float64(g.level.enterY)+1
+	} else {
+		for {
+			g.player.x, g.player.y = float64(rand.Intn(g.level.w)), float64(rand.Intn(g.level.h))
+			if g.level.isFloor(g.player.x, g.player.y) {
+				break
+			}
 		}
 	}
 
@@ -336,6 +339,39 @@ func (g *game) updateCursor() {
 	ebiten.SetCursorShape(ebiten.CursorShapeCrosshair)
 }
 
+func (g *game) handlePlayerDeath() {
+	if g.player.health > 0 {
+		return
+	}
+
+	g.player.holyWaters = 0
+
+	g.gameOverTime = time.Now()
+
+	// Play die sound.
+	err := g.playSound(SoundPlayerDie, playerDieVolume)
+	if err != nil {
+		// TODO return err
+		panic(err)
+	}
+
+	g.updateCursor()
+}
+
+func (g *game) checkLevelComplete() {
+	if g.player.soulsRescued < g.level.requiredSouls || g.level.exitOpen {
+		return
+	}
+	g.level.exitOpen = true
+
+	g.level.tiles[g.level.exitY][g.level.exitX].sprites = nil
+	g.level.tiles[g.level.exitY][g.level.exitX].AddSprite(sandstoneSS.FloorA)
+	g.level.tiles[g.level.exitY][g.level.exitX].AddSprite(sandstoneSS.DoorOpen)
+
+	// TODO widen doorway
+	// TODO add trigger entity or hardcode check
+}
+
 // Update reads current user input and updates the game state.
 func (g *game) Update() error {
 	gamepadDeadZone := 0.1
@@ -393,7 +429,6 @@ func (g *game) Update() error {
 
 	g.resetExpiredTimers()
 
-	biteThreshold := 0.75
 	liveCreeps := 0
 	for _, c := range g.level.creeps {
 		if c.health == 0 {
@@ -406,11 +441,24 @@ func (g *game) Update() error {
 			continue
 		}
 
+		biteThreshold := 0.75
+		if c.creepType == TypeSoul {
+			biteThreshold = 0.25
+		}
+
 		// TODO can this move into creep?
 		cx, cy := c.Position()
 		dx, dy := deltaXY(g.player.x, g.player.y, cx, cy)
 		if dx <= biteThreshold && dy <= biteThreshold {
-			if !g.godMode && !c.repelled() {
+			if c.creepType == TypeSoul {
+				g.player.soulsRescued++
+				err := g.hurtCreep(c, -1)
+				if err != nil {
+					// TODO
+					panic(err)
+				}
+				g.checkLevelComplete()
+			} else if !g.godMode && !c.repelled() {
 				if g.player.holyWaters > 0 {
 					// TODO g.playSound(SoundItemUseHolyWater, useholyWaterVolume)
 					g.player.holyWaterUntil = time.Now().Add(holyWaterActiveTime)
@@ -431,21 +479,8 @@ func (g *game) Update() error {
 					}
 
 					g.addBloodSplatter(g.player.x, g.player.y)
-				}
-			}
 
-			if g.player.health == 0 {
-				ebiten.SetCursorShape(ebiten.CursorShapeDefault)
-
-				g.player.holyWaters = 0
-
-				g.gameOverTime = time.Now()
-
-				// Play die sound.
-				err := g.playSound(SoundPlayerDie, playerDieVolume)
-				if err != nil {
-					// TODO return err
-					panic(err)
+					g.handlePlayerDeath()
 				}
 			}
 		} else if c.creepType == TypeBat && (dx <= 12 && dy <= 7) && rand.Intn(166) == 6 && time.Since(g.lastBatSound) >= batSoundDelay {
@@ -575,6 +610,7 @@ func (g *game) Update() error {
 
 	// Update boolets.
 	bulletHitThreshold := 0.501
+	bulletSeekThreshold := 2.0
 	removed := 0
 UPDATEPROJECTILES:
 	for i, p := range g.projectiles {
@@ -601,13 +637,16 @@ UPDATEPROJECTILES:
 		}
 
 		for _, c := range g.level.creeps {
-			if c.health == 0 {
+			if c.health == 0 || c.creepType == TypeSoul {
 				continue
 			}
 
 			cx, cy := c.Position()
 			dx, dy := deltaXY(p.x, p.y, cx, cy)
 			if dx > bulletHitThreshold || dy > bulletHitThreshold {
+				if dx < bulletSeekThreshold && dy < bulletSeekThreshold {
+					c.seekPlayer()
+				}
 				continue
 			}
 
@@ -660,7 +699,7 @@ UPDATEPROJECTILES:
 	}
 
 	// Spawn garlic.
-	if g.tick%(144*45) == 0 {
+	if g.tick%(144*45) == 0 || rand.Intn(666) == 0 {
 		item := g.newItem(itemTypeGarlic)
 		g.level.items = append(g.level.items, item)
 
@@ -670,7 +709,7 @@ UPDATEPROJECTILES:
 	}
 
 	// Spawn holy water.
-	if g.tick%(144*120) == 0 || rand.Intn(660) == 0 { // TODO
+	if g.tick%(144*120) == 0 || rand.Intn(666) == 0 {
 		item := g.newItem(itemTypeHolyWater)
 		g.level.items = append(g.level.items, item)
 
@@ -729,14 +768,7 @@ UPDATEPROJECTILES:
 		}
 	}
 
-	if inpututil.IsKeyJustPressed(ebiten.KeyG) {
-		g.godMode = !g.godMode
-		if g.godMode {
-			g.flashMessage("GOD MODE ACTIVATED")
-		} else {
-			g.flashMessage("GOD MODE DEACTIVATED")
-		}
-	}
+	// Read user input.
 	if inpututil.IsKeyJustPressed(ebiten.KeyM) {
 		g.muteAudio = !g.muteAudio
 		if g.muteAudio {
@@ -745,88 +777,92 @@ UPDATEPROJECTILES:
 			g.flashMessage("AUDIO UNMUTED")
 		}
 	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyN) {
-		g.noclipMode = !g.noclipMode
-		if g.noclipMode {
-			g.flashMessage("NOCLIP MODE ACTIVATED")
-		} else {
-			g.flashMessage("NOCLIP MODE DEACTIVATED")
-		}
-	}
-	spawnAmount := 13
-	if ebiten.IsKeyPressed(ebiten.KeyControl) && inpututil.IsKeyJustPressed(ebiten.Key1) {
-		for i := 0; i < spawnAmount; i++ {
-			g.level.addCreep(TypeVampire)
-		}
-		g.flashMessage(fmt.Sprintf("SPAWNED %d VAMPIRES", spawnAmount))
-	}
-	if ebiten.IsKeyPressed(ebiten.KeyControl) && inpututil.IsKeyJustPressed(ebiten.Key2) {
-		for i := 0; i < spawnAmount; i++ {
-			g.level.addCreep(TypeBat)
-		}
-		g.flashMessage(fmt.Sprintf("SPAWNED %d BATS", spawnAmount))
-	}
-	if ebiten.IsKeyPressed(ebiten.KeyControl) && inpututil.IsKeyJustPressed(ebiten.Key3) {
-		for i := 0; i < spawnAmount; i++ {
-			g.level.addCreep(TypeGhost)
-		}
-		g.flashMessage(fmt.Sprintf("SPAWNED %d GHOST", spawnAmount))
-	}
-	if inpututil.IsKeyJustPressed(ebiten.Key7) {
-		g.player.holyWaters++
-		g.flashMessage("SPAWNED HOLY WATER")
-	}
-	if inpututil.IsKeyJustPressed(ebiten.Key8) {
-		// TODO Add garlic to inventory
-		//g.flashMessage("+ GARLIC")
-	}
-	if ebiten.IsKeyPressed(ebiten.KeyControl) && inpututil.IsKeyJustPressed(ebiten.KeyDigit0) {
-		g.fullBrightMode = !g.fullBrightMode
-		if g.fullBrightMode {
-			g.flashMessage("FULLBRIGHT MODE ACTIVATED")
-		} else {
-			g.flashMessage("FULLBRIGHT MODE DEACTIVATED")
-		}
-	}
-	if ebiten.IsKeyPressed(ebiten.KeyControl) && ebiten.IsKeyPressed(ebiten.KeyShift) && inpututil.IsKeyJustPressed(ebiten.KeyEqual) {
-		g.showWinScreen()
-		g.flashMessage("WARPED TO WIN SCREEN")
-	} else if ebiten.IsKeyPressed(ebiten.KeyControl) && inpututil.IsKeyJustPressed(ebiten.KeyEqual) {
-		err := g.nextLevel()
-		if err != nil {
-			return err
-		}
-		g.flashMessage(fmt.Sprintf("WARPED TO LEVEL %d", g.levelNum))
-	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyV) {
-		g.debugMode = !g.debugMode
-		if g.debugMode {
-			g.flashMessage("DEBUG MODE ACTIVATED")
-		} else {
-			g.flashMessage("DEBUG MODE DEACTIVATED")
-		}
-	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyP) {
-		if g.cpuProfile == nil {
-			g.flashMessage("CPU PROFILING STARTED")
+	if ebiten.IsKeyPressed(ebiten.KeyControl) {
+		spawnAmount := 13
+		switch {
+		case inpututil.IsKeyJustPressed(ebiten.KeyE):
+			g.player.x, g.player.y = float64(g.level.exitX), float64(g.level.exitY+1)
+			g.flashMessage("WARPED TO EXIT")
+		case inpututil.IsKeyJustPressed(ebiten.KeyF):
+			g.fullBrightMode = !g.fullBrightMode
+			if g.fullBrightMode {
+				g.flashMessage("FULLBRIGHT MODE ACTIVATED")
+			} else {
+				g.flashMessage("FULLBRIGHT MODE DEACTIVATED")
+			}
+		case inpututil.IsKeyJustPressed(ebiten.KeyG):
+			g.godMode = !g.godMode
+			if g.godMode {
+				g.flashMessage("GOD MODE ACTIVATED")
+			} else {
+				g.flashMessage("GOD MODE DEACTIVATED")
+			}
+		case inpututil.IsKeyJustPressed(ebiten.KeyN):
+			g.noclipMode = !g.noclipMode
+			if g.noclipMode {
+				g.flashMessage("NOCLIP MODE ACTIVATED")
+			} else {
+				g.flashMessage("NOCLIP MODE DEACTIVATED")
+			}
+		case inpututil.IsKeyJustPressed(ebiten.KeyV):
+			g.debugMode = !g.debugMode
+			if g.debugMode {
+				g.flashMessage("DEBUG MODE ACTIVATED")
+			} else {
+				g.flashMessage("DEBUG MODE DEACTIVATED")
+			}
+		case inpututil.IsKeyJustPressed(ebiten.KeyP):
+			if g.cpuProfile == nil {
+				g.flashMessage("CPU PROFILING STARTED")
 
-			homeDir, err := os.UserHomeDir()
+				homeDir, err := os.UserHomeDir()
+				if err != nil {
+					return err
+				}
+				g.cpuProfile, err = os.Create(path.Join(homeDir, "cartillery.prof"))
+				if err != nil {
+					return err
+				}
+				if err := pprof.StartCPUProfile(g.cpuProfile); err != nil {
+					return err
+				}
+			} else {
+				g.flashMessage("CPU PROFILING STOPPED")
+
+				pprof.StopCPUProfile()
+				g.cpuProfile.Close()
+				g.cpuProfile = nil
+			}
+		case inpututil.IsKeyJustPressed(ebiten.Key1):
+			for i := 0; i < spawnAmount; i++ {
+				g.level.addCreep(TypeVampire)
+			}
+			g.flashMessage(fmt.Sprintf("SPAWNED %d VAMPIRES", spawnAmount))
+		case inpututil.IsKeyJustPressed(ebiten.Key2):
+			for i := 0; i < spawnAmount; i++ {
+				g.level.addCreep(TypeBat)
+			}
+			g.flashMessage(fmt.Sprintf("SPAWNED %d BATS", spawnAmount))
+		case inpututil.IsKeyJustPressed(ebiten.Key3):
+			for i := 0; i < spawnAmount; i++ {
+				g.level.addCreep(TypeGhost)
+			}
+			g.flashMessage(fmt.Sprintf("SPAWNED %d GHOSTS", spawnAmount))
+		case inpututil.IsKeyJustPressed(ebiten.Key7):
+			g.player.holyWaters++
+			g.flashMessage("SPAWNED HOLY WATER")
+		case inpututil.IsKeyJustPressed(ebiten.Key8):
+			// TODO Add garlic to inventory
+			//g.flashMessage("+ GARLIC")
+		case ebiten.IsKeyPressed(ebiten.KeyShift) && inpututil.IsKeyJustPressed(ebiten.KeyEqual):
+			g.showWinScreen()
+			g.flashMessage("WARPED TO WIN SCREEN")
+		case inpututil.IsKeyJustPressed(ebiten.KeyEqual):
+			err := g.nextLevel()
 			if err != nil {
 				return err
 			}
-			g.cpuProfile, err = os.Create(path.Join(homeDir, "cartillery.prof"))
-			if err != nil {
-				return err
-			}
-			if err := pprof.StartCPUProfile(g.cpuProfile); err != nil {
-				return err
-			}
-		} else {
-			g.flashMessage("CPU PROFILING STOPPED")
-
-			pprof.StopCPUProfile()
-			g.cpuProfile.Close()
-			g.cpuProfile = nil
+			g.flashMessage(fmt.Sprintf("WARPED TO LEVEL %d", g.levelNum))
 		}
 	}
 
@@ -834,12 +870,12 @@ UPDATEPROJECTILES:
 	return nil
 }
 
-func (g *game) drawText(target *ebiten.Image, y float64, scale float64, alpha float64, text string) {
+func (g *game) drawText(target *ebiten.Image, offsetX float64, y float64, scale float64, alpha float64, text string) {
 	g.overlayImg.Clear()
 	ebitenutil.DebugPrint(g.overlayImg, text)
 	g.op.GeoM.Reset()
 	g.op.GeoM.Scale(scale, scale)
-	g.op.GeoM.Translate(float64(g.w/2)-(float64(len(text))*3*scale), y)
+	g.op.GeoM.Translate(float64(g.w/2)-(float64(len(text))*3*scale)+offsetX, y)
 	g.op.ColorM.Scale(1, 1, 1, alpha)
 	target.DrawImage(g.overlayImg, g.op)
 	g.op.ColorM.Reset()
@@ -850,14 +886,14 @@ func (g *game) Draw(screen *ebiten.Image) {
 	if g.gameStartTime.IsZero() {
 		screen.Fill(colorBlood)
 
-		g.drawText(screen, float64(g.h/2)-350, 16, 1.0, "CAROTID")
-		g.drawText(screen, float64(g.h/2)-100, 16, 1.0, "ARTILLERY")
+		g.drawText(screen, 0, float64(g.h/2)-350, 16, 1.0, "CAROTID")
+		g.drawText(screen, 0, float64(g.h/2)-100, 16, 1.0, "ARTILLERY")
 
-		g.drawText(screen, float64(g.h-210), 4, 1.0, "WASD + MOUSE = OK")
-		g.drawText(screen, float64(g.h-145), 4, 1.0, "FULLSCREEN + GAMEPAD = BEST")
+		g.drawText(screen, 0, float64(g.h-210), 4, 1.0, "WASD + MOUSE = OK")
+		g.drawText(screen, 0, float64(g.h-145), 4, 1.0, "FULLSCREEN + GAMEPAD = BEST")
 
 		if time.Now().UnixMilli()%2000 < 1500 {
-			g.drawText(screen, float64(g.h-80), 4, 1.0, "PRESS ANY KEY OR BUTTON TO START")
+			g.drawText(screen, 0, float64(g.h-80), 4, 1.0, "PRESS ANY KEY OR BUTTON TO START")
 		}
 
 		return
@@ -865,6 +901,18 @@ func (g *game) Draw(screen *ebiten.Image) {
 
 	var drawn int
 	if g.gameOverTime.IsZero() || g.gameWon {
+		if g.gameWon {
+			g.op.GeoM.Reset()
+			g.op.ColorM.Reset()
+			g.op.ColorM.Scale(g.winScreenColorScale, g.winScreenColorScale, g.winScreenColorScale, 1)
+			screen.DrawImage(g.winScreenBackground, g.op)
+			g.op.GeoM.Reset()
+			g.op.GeoM.Translate(float64(g.w)*0.75, g.winScreenSunY)
+			g.op.ColorM.Reset()
+			g.op.ColorM.Scale(g.winScreenColorScale, g.winScreenColorScale, g.winScreenColorScale, 1)
+			screen.DrawImage(g.winScreenSun, g.op)
+			g.op.ColorM.Reset()
+		}
 		drawn = g.renderLevel(screen)
 	} else {
 		// Draw game over screen.
@@ -882,29 +930,48 @@ func (g *game) Draw(screen *ebiten.Image) {
 		screen.DrawImage(img, g.op)
 		g.op.ColorM.Reset()
 
-		g.drawText(screen, float64(g.h/2)-150, 16, a, "GAME OVER")
+		g.drawText(screen, 0, float64(g.h/2)-150, 16, a, "GAME OVER")
 
 		if time.Since(g.gameOverTime).Milliseconds()%2000 < 1500 {
-			g.drawText(screen, 8, 4, a, "PRESS ENTER OR START TO PLAY AGAIN")
+			g.drawText(screen, 0, 8, 4, a, "PRESS ENTER OR START TO PLAY AGAIN")
 		}
 
 	}
 
 	if g.gameOverTime.IsZero() {
+		// Draw health.
 		heartSpace := 32
-		heartX := (g.w / 2) - ((heartSpace * g.player.health) / 2) + 8
+		heartX := (g.w / 2) - ((heartSpace * g.player.health) / 2)
 		for i := 0; i < g.player.health; i++ {
 			g.op.GeoM.Reset()
 			g.op.GeoM.Translate(float64(heartX+(i*heartSpace)), 32)
 			screen.DrawImage(imageAtlas[ImageHeart], g.op)
 		}
 
+		// Draw holy waters.
 		holyWaterSpace := 16
-		holyWaterX := (g.w / 2) - ((holyWaterSpace * g.player.holyWaters) / 2)
+		holyWaterX := (g.w / 2) - ((holyWaterSpace * g.player.holyWaters) / 2) - 8
 		for i := 0; i < g.player.holyWaters; i++ {
 			g.op.GeoM.Reset()
 			g.op.GeoM.Translate(float64(holyWaterX+(i*holyWaterSpace)), 76)
 			screen.DrawImage(imageAtlas[ImageHolyWater], g.op)
+		}
+
+		scale := 3.0
+		soulsY := 104.0
+		if !g.level.exitOpen {
+			// Draw souls.
+			soulsLabel := fmt.Sprintf("%d", g.level.requiredSouls-g.player.soulsRescued)
+
+			g.op.GeoM.Reset()
+			g.op.GeoM.Translate(float64(g.w/2)-(float64(len(soulsLabel))*3*scale)-40, soulsY+8)
+			screen.DrawImage(ojasDungeonSS.Soul1, g.op)
+
+			g.drawText(screen, 0, soulsY, scale, 1.0, soulsLabel)
+		} else {
+			// Draw exit message.
+			// TODO flash text
+			g.drawText(screen, 0, soulsY, scale, 1.0, "EXIT OPEN")
 		}
 	}
 
@@ -914,7 +981,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 		if alpha > 1 {
 			alpha = 1
 		}
-		g.drawText(screen, float64(g.h-40), 2, alpha, g.flashMessageText)
+		g.drawText(screen, 0, float64(g.h-40), 2, alpha, g.flashMessageText)
 	}
 
 	if !g.gameWon {
@@ -923,7 +990,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 			a = 1
 		}
 		scoreLabel := numberPrinter.Sprintf("%d", g.player.score)
-		g.drawText(screen, float64(g.h-150), 8, a, scoreLabel)
+		g.drawText(screen, 0, float64(g.h-150), 8, a, scoreLabel)
 	}
 
 	if !g.debugMode {
@@ -1014,7 +1081,12 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 				continue
 			}
 
-			drawn += g.renderSprite(c.x, c.y, 0, 0, c.angle, 1.0, g.colorScale(c.x, c.y), 1.0, c.sprites[c.frame], screen)
+			a := 1.0
+			if c.creepType == TypeSoul {
+				a = 0.35
+			}
+
+			drawn += g.renderSprite(c.x, c.y, 0, 0, c.angle, 1.0, g.colorScale(c.x, c.y), a, c.sprites[c.frame], screen)
 			if c.frames > 1 && time.Since(c.lastFrame) >= 75*time.Millisecond {
 				c.frame++
 				if c.frame == c.frames {
@@ -1211,6 +1283,11 @@ func (g *game) hurtCreep(c *gameCreep, damage int) error {
 
 	g.addBloodSplatter(c.x, c.y)
 
+	soul := g.level.addCreep(TypeSoul)
+	soul.x, soul.y = c.x, c.y
+	soul.moveX, soul.moveY = c.moveX/4, c.moveY/4
+	soul.tick, soul.nextAction = c.tick, c.nextAction
+
 	return nil
 }
 
@@ -1256,6 +1333,11 @@ func (g *game) showWinScreen() {
 	if !g.gameOverTime.IsZero() {
 		return
 	}
+
+	// TODO make it a sunrise instead
+
+	g.forceColorScale = 0.4
+
 	g.gameWon = true
 	g.gameOverTime = time.Now()
 
@@ -1267,13 +1349,53 @@ func (g *game) showWinScreen() {
 
 	g.level = newWinLevel(g.player)
 
-	go func() {
-		time.Sleep(10 * time.Second)
+	// TODO move win screen background upward
 
-		for i := 1.0; i > 0.001; i *= 0.99 {
-			g.forceColorScale = i
+	g.winScreenBackground = ebiten.NewImage(g.w, g.h)
+	g.winScreenBackground.Fill(colornames.Deepskyblue)
+
+	sunSize := 66
+	g.winScreenSun = ebiten.NewImage(sunSize, sunSize)
+	g.winScreenSun.Fill(color.RGBA{254, 231, 108, 255})
+
+	g.winScreenSunY = float64(g.h/2) + float64(sunSize/2)
+
+	go func() {
+		// Animate sunrise.
+		go func() {
+			time.Sleep(5 * time.Second)
+			for i := 0; i < 144*15; i++ {
+				g.winScreenSunY -= 0.035
+
+				if i > int(144*3.5) {
+					g.forceColorScale += 0.0005
+					if g.forceColorScale > 1 {
+						g.forceColorScale = 1
+					}
+				}
+
+				time.Sleep(time.Second / 144)
+			}
+		}()
+
+		// Fade in sky.
+		for i := 0.0001; i < 1; i *= 1.005 {
+			g.winScreenColorScale = i
+
 			time.Sleep(time.Second / 144)
 		}
+
+		time.Sleep(5 * time.Second)
+
+		// Fade out win screen.
+
+		for i := 0; i < 144; i++ {
+			g.winScreenColorScale -= 0.01
+			g.forceColorScale -= 0.01
+			time.Sleep(time.Second / 144)
+		}
+
+		// Fade in game over screen.
 
 		g.gameWon = false
 

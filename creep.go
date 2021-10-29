@@ -14,6 +14,7 @@ const (
 	TypeVampire = iota
 	TypeBat
 	TypeGhost
+	TypeSoul
 	TypeTorch
 )
 
@@ -67,6 +68,10 @@ func newCreep(creepType int, l *Level, p *gamePlayer) *gameCreep {
 			imageAtlas[ImageGhost1],
 		}
 		startingHealth = 1
+	} else if creepType == TypeSoul {
+		sprites = []*ebiten.Image{
+			ojasDungeonSS.Soul1,
+		}
 	} else if creepType == TypeTorch {
 		sprites = []*ebiten.Image{
 			sandstoneSS.TorchTop1,
@@ -114,8 +119,8 @@ func (c *gameCreep) queueNextAction() {
 func (c *gameCreep) runAway() {
 	c.queueNextAction()
 
-	randMovementA := (rand.Float64() - 0.5) / 8
-	randMovementB := (rand.Float64() - 0.5) / 8
+	randMovementA := ((rand.Float64() - 0.5) * c.moveSpeed()) / 8
+	randMovementB := ((rand.Float64() - 0.5) * c.moveSpeed()) / 8
 
 	c.moveX = c.x - c.player.x
 	if c.moveX < 0 {
@@ -131,9 +136,20 @@ func (c *gameCreep) runAway() {
 	}
 }
 
+func (c *gameCreep) moveSpeed() float64 {
+	if c.creepType == TypeSoul {
+		return 0.5 / 4
+	}
+	return 0.4
+}
+
 func (c *gameCreep) seekPlayer() {
-	maxSpeed := 0.5 / 9
-	minSpeed := 0.1 / 9
+	maxSpeed := c.moveSpeed() / 9
+	minSpeed := c.moveSpeed() / 5 / 9
+
+	if c.creepType == TypeSoul {
+		maxSpeed *= 5
+	}
 
 	a := angle(c.x, c.y, c.player.x, c.player.y)
 	c.moveX = -math.Cos(a)
@@ -155,14 +171,15 @@ func (c *gameCreep) seekPlayer() {
 		c.moveY *= 0.9
 	}
 
+	c.tick = 0
 	c.nextAction = 1440
 }
 
 func (c *gameCreep) doNextAction() {
 	c.queueNextAction()
 
-	randMovementA := (rand.Float64() - 0.5) / 12
-	randMovementB := (rand.Float64() - 0.5) / 12
+	randMovementA := ((rand.Float64() - 0.5) * c.moveSpeed()) / 12
+	randMovementB := ((rand.Float64() - 0.5) * c.moveSpeed()) / 12
 
 	if c.creepType == TypeGhost {
 		c.angle = angle(c.x, c.y, c.player.x, c.player.y)
@@ -181,7 +198,7 @@ func (c *gameCreep) doNextAction() {
 	}
 
 	repelled := c.repelled()
-	if !repelled && rand.Intn(13) == 0 {
+	if !repelled && rand.Intn(13) == 0 && c.creepType != TypeSoul {
 		c.seekPlayer()
 	} else {
 		c.moveX = randMovementA
@@ -201,6 +218,9 @@ func (c *gameCreep) doNextAction() {
 }
 
 func (c *gameCreep) repelled() bool {
+	if c.creepType == TypeSoul {
+		return false
+	}
 	repelled := !c.player.garlicUntil.IsZero() || !c.player.holyWaterUntil.IsZero()
 	return repelled
 }
@@ -274,7 +294,7 @@ func (c *gameCreep) Update() {
 	}
 
 	dx, dy := deltaXY(c.x, c.y, c.player.x, c.player.y)
-	seekDistance := 2.0
+	seekDistance := 3.5
 	if !repelled && dx < seekDistance && dy < seekDistance {
 		c.queueNextAction()
 		c.seekPlayer()

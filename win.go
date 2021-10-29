@@ -125,26 +125,65 @@ func newWinLevel(p *gamePlayer) *Level {
 
 	l.bakeLightmap()
 
+	doorX := float64(startX) - 0.4
+
 	p.angle = 0
-	p.x, p.y = float64(startX), float64(startY)
+	p.x, p.y = doorX, float64(startY)
 
 	go func() {
 		// Walk away.
-		for i := 0; i < 144; i++ {
-			p.x += 0.05 * (float64(144-i) / 144)
+		for i := 0; i < 36; i++ {
+			p.x += 0.05
 			time.Sleep(time.Second / 144)
 		}
-		time.Sleep(time.Second / 2)
+		for i := 0; i < 288; i++ {
+			p.x += 0.05 * (float64(288-i) / 288)
+			time.Sleep(time.Second / 144)
+		}
 
 		// Turn around.
 		p.angle = math.Pi
-		time.Sleep(time.Second / 2)
+		time.Sleep(time.Millisecond * 1750)
 
-		throwEnd := float64(startX) - 0.4
+		// Throw weapon.
+		weaponSprite := newCreep(TypeTorch, l, p)
+		weaponSprite.x, weaponSprite.y = p.x, p.y-0.25
+		weaponSprite.frames = 1
+		weaponSprite.frame = 0
+		weaponSprite.sprites = []*ebiten.Image{
+			imageAtlas[ImageUzi],
+		}
+
+		p.weapon = nil
+		l.creeps = append(l.creeps, weaponSprite)
+
+		go func() {
+			for i := 0; i < 144*2; i++ {
+				if weaponSprite.x < doorX {
+					for i, c := range l.creeps {
+						if c == weaponSprite {
+							l.creeps = append(l.creeps[:i], l.creeps[i+1:]...)
+						}
+					}
+					return
+				}
+
+				weaponSprite.x -= 0.05
+				if i < 100 {
+					weaponSprite.y -= 0.005 * (float64(144-i) / 144)
+				} else {
+					weaponSprite.y += 0.01 * (float64(288-i) / 288)
+				}
+				weaponSprite.angle -= .1
+				time.Sleep(time.Second / 144)
+			}
+		}()
+
+		time.Sleep(time.Second / 2)
 
 		// Throw torch.
 		torchSprite := newCreep(TypeTorch, l, p)
-		torchSprite.x, torchSprite.y = p.x, p.y
+		torchSprite.x, torchSprite.y = p.x, p.y-0.25
 		torchSprite.frames = 1
 		torchSprite.frame = 0
 		torchSprite.sprites = []*ebiten.Image{
@@ -156,7 +195,7 @@ func newWinLevel(p *gamePlayer) *Level {
 
 		go func() {
 			for i := 0; i < 144*3; i++ {
-				if torchSprite.x < throwEnd {
+				if torchSprite.x < doorX {
 					for i, c := range l.creeps {
 						if c == torchSprite {
 							l.creeps = append(l.creeps[:i], l.creeps[i+1:]...)
@@ -165,64 +204,32 @@ func newWinLevel(p *gamePlayer) *Level {
 				}
 
 				torchSprite.x -= 0.05
+				if i < 100 {
+					torchSprite.y -= 0.005 * (float64(144-i) / 144)
+				} else {
+					torchSprite.y += 0.01 * (float64(288-i) / 288)
+				}
+
 				torchSprite.angle -= .1
 				time.Sleep(time.Second / 144)
 			}
 		}()
 
-		time.Sleep(time.Second / 2)
-
-		// Throw weapon.
-		weaponSprite := newCreep(TypeTorch, l, p)
-		weaponSprite.x, weaponSprite.y = p.x, p.y
-		weaponSprite.frames = 1
-		weaponSprite.frame = 0
-		weaponSprite.sprites = []*ebiten.Image{
-			imageAtlas[ImageUzi],
-		}
-
-		p.weapon = nil
-		l.creeps = append(l.creeps, weaponSprite)
-
-		go func() {
-			for i := 0; i < 144*3; i++ {
-				if weaponSprite.x < throwEnd {
-					for i, c := range l.creeps {
-						if c == weaponSprite {
-							l.creeps = append(l.creeps[:i], l.creeps[i+1:]...)
-						}
-					}
-				}
-
-				weaponSprite.x -= 0.05
-				weaponSprite.angle -= .1
-				time.Sleep(time.Second / 144)
-			}
-		}()
-
 		// Walk away.
-		time.Sleep(time.Second / 2)
+		time.Sleep(time.Second)
 
 		p.angle = 0
-		time.Sleep(time.Second / 2)
 		for i := 0; i < 144; i++ {
 			p.x += 0.05 * (float64(i) / 144)
 			time.Sleep(time.Second / 144)
 		}
-		for i := 0; i < 144*12; i++ {
+		for i := 0; i < 144*15; i++ {
 			if p.health > 0 {
 				// Game has restarted.
 				return
 			}
 			p.x += 0.05
 			time.Sleep(time.Second / 144)
-		}
-
-		return
-		t := time.NewTicker(time.Second / 144)
-		for range t.C {
-			p.x += 0.05
-			p.angle += 0.1
 		}
 	}()
 

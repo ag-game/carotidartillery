@@ -33,6 +33,8 @@ type EnvironmentSpriteSheet struct {
 	TorchTop8       *ebiten.Image
 	TorchTop9       *ebiten.Image
 	TorchMulti      *ebiten.Image
+	DoorOpen        *ebiten.Image
+	DoorClosed      *ebiten.Image
 }
 
 // LoadEnvironmentSpriteSheet loads the embedded EnvironmentSpriteSheet.
@@ -69,6 +71,8 @@ func LoadEnvironmentSpriteSheet() (*EnvironmentSpriteSheet, error) {
 	s.WallTopLeft = dungeonSpriteAt(2, 3)
 	s.WallTopRight = dungeonSpriteAt(0, 3)
 	s.WallPillar = dungeonSpriteAt(8, 4)
+	s.DoorOpen = dungeonSpriteAt(3, 3)
+	s.DoorClosed = dungeonSpriteAt(3, 2)
 
 	// Prop sprites
 	propFile, err := assetsFS.Open("assets/sandstone-dungeon/Tiles-Props-pack.png")
