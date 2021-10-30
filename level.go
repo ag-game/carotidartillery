@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"time"
 
 	"github.com/Meshiest/go-dungeon/dungeon"
 )
@@ -29,7 +30,7 @@ type Level struct {
 	enterX, enterY int
 	exitX, exitY   int
 
-	exitOpen bool
+	exitOpenTime time.Time
 
 	requiredSouls int
 }

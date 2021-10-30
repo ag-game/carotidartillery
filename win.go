@@ -1,9 +1,7 @@
 package main
 
 import (
-	"math"
 	"math/rand"
-	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 )
@@ -129,109 +127,6 @@ func newWinLevel(p *gamePlayer) *Level {
 
 	p.angle = 0
 	p.x, p.y = doorX, float64(startY)
-
-	go func() {
-		// Walk away.
-		for i := 0; i < 36; i++ {
-			p.x += 0.05
-			time.Sleep(time.Second / 144)
-		}
-		for i := 0; i < 288; i++ {
-			p.x += 0.05 * (float64(288-i) / 288)
-			time.Sleep(time.Second / 144)
-		}
-
-		// Turn around.
-		p.angle = math.Pi
-		time.Sleep(time.Millisecond * 1750)
-
-		// Throw weapon.
-		weaponSprite := newCreep(TypeTorch, l, p)
-		weaponSprite.x, weaponSprite.y = p.x, p.y-0.25
-		weaponSprite.frames = 1
-		weaponSprite.frame = 0
-		weaponSprite.sprites = []*ebiten.Image{
-			imageAtlas[ImageUzi],
-		}
-
-		p.weapon = nil
-		l.creeps = append(l.creeps, weaponSprite)
-
-		go func() {
-			for i := 0; i < 144*2; i++ {
-				if weaponSprite.x < doorX {
-					for i, c := range l.creeps {
-						if c == weaponSprite {
-							l.creeps = append(l.creeps[:i], l.creeps[i+1:]...)
-						}
-					}
-					return
-				}
-
-				weaponSprite.x -= 0.05
-				if i < 100 {
-					weaponSprite.y -= 0.005 * (float64(144-i) / 144)
-				} else {
-					weaponSprite.y += 0.01 * (float64(288-i) / 288)
-				}
-				weaponSprite.angle -= .1
-				time.Sleep(time.Second / 144)
-			}
-		}()
-
-		time.Sleep(time.Second / 2)
-
-		// Throw torch.
-		torchSprite := newCreep(TypeTorch, l, p)
-		torchSprite.x, torchSprite.y = p.x, p.y-0.25
-		torchSprite.frames = 1
-		torchSprite.frame = 0
-		torchSprite.sprites = []*ebiten.Image{
-			sandstoneSS.TorchMulti,
-		}
-
-		p.hasTorch = false
-		l.creeps = append(l.creeps, torchSprite)
-
-		go func() {
-			for i := 0; i < 144*3; i++ {
-				if torchSprite.x < doorX {
-					for i, c := range l.creeps {
-						if c == torchSprite {
-							l.creeps = append(l.creeps[:i], l.creeps[i+1:]...)
-						}
-					}
-				}
-
-				torchSprite.x -= 0.05
-				if i < 100 {
-					torchSprite.y -= 0.005 * (float64(144-i) / 144)
-				} else {
-					torchSprite.y += 0.01 * (float64(288-i) / 288)
-				}
-
-				torchSprite.angle -= .1
-				time.Sleep(time.Second / 144)
-			}
-		}()
-
-		// Walk away.
-		time.Sleep(time.Second)
-
-		p.angle = 0
-		for i := 0; i < 144; i++ {
-			p.x += 0.05 * (float64(i) / 144)
-			time.Sleep(time.Second / 144)
-		}
-		for i := 0; i < 144*15; i++ {
-			if p.health > 0 {
-				// Game has restarted.
-				return
-			}
-			p.x += 0.05
-			time.Sleep(time.Second / 144)
-		}
-	}()
 
 	return l
 }

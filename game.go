@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"runtime/pprof"
+	"sync"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -116,7 +117,8 @@ type game struct {
 	flashMessageText  string
 	flashMessageUntil time.Time
 
-	forceColorScale float64
+	minLevelColorScale  float64
+	minPlayerColorScale float64
 
 	godMode        bool
 	noclipMode     bool
@@ -124,6 +126,8 @@ type game struct {
 	debugMode      bool
 	fullBrightMode bool
 	cpuProfile     *os.File
+
+	sync.Mutex
 }
 
 const sampleRate = 44100
@@ -131,13 +135,14 @@ const sampleRate = 44100
 // NewGame returns a new isometric demo game.
 func NewGame() (*game, error) {
 	g := &game{
-		camScale:        2,
-		camScaleTo:      2,
-		mousePanX:       math.MinInt32,
-		mousePanY:       math.MinInt32,
-		activeGamepad:   -1,
-		forceColorScale: -1,
-		levelNum:        1,
+		camScale:            2,
+		camScaleTo:          2,
+		mousePanX:           math.MinInt32,
+		mousePanY:           math.MinInt32,
+		activeGamepad:       -1,
+		minLevelColorScale:  -1,
+		minPlayerColorScale: -1,
+		levelNum:            1,
 
 		op: &ebiten.DrawImageOptions{},
 	}
@@ -286,7 +291,8 @@ func (g *game) reset() error {
 
 	g.updateCursor()
 
-	g.forceColorScale = -1
+	g.minLevelColorScale = -1
+	g.minPlayerColorScale = -1
 
 	g.player.hasTorch = true
 	g.player.weapon = weaponUzi
@@ -359,10 +365,10 @@ func (g *game) handlePlayerDeath() {
 }
 
 func (g *game) checkLevelComplete() {
-	if g.player.soulsRescued < g.level.requiredSouls || g.level.exitOpen {
+	if g.player.soulsRescued < g.level.requiredSouls || !g.level.exitOpenTime.IsZero() {
 		return
 	}
-	g.level.exitOpen = true
+	g.level.exitOpenTime = time.Now()
 
 	g.level.tiles[g.level.exitY][g.level.exitX].sprites = nil
 	g.level.tiles[g.level.exitY][g.level.exitX].AddSprite(sandstoneSS.FloorA)
@@ -374,6 +380,9 @@ func (g *game) checkLevelComplete() {
 
 // Update reads current user input and updates the game state.
 func (g *game) Update() error {
+	g.Lock()
+	defer g.Unlock()
+
 	gamepadDeadZone := 0.1
 
 	if ebiten.IsKeyPressed(ebiten.KeyEscape) || ebiten.IsWindowBeingClosed() {
@@ -493,13 +502,6 @@ func (g *game) Update() error {
 		}
 	}
 	g.level.liveCreeps = liveCreeps
-
-	// Clamp target zoom level.
-	/*if g.camScaleTo < 2 {
-		g.camScaleTo = 2
-	} else if g.camScaleTo > 4 {
-		g.camScaleTo = 4
-	} TODO */
 
 	// Update target zoom level.
 	if g.debugMode {
@@ -883,6 +885,9 @@ func (g *game) drawText(target *ebiten.Image, offsetX float64, y float64, scale 
 
 // Draw draws the game on the screen.
 func (g *game) Draw(screen *ebiten.Image) {
+	g.Lock()
+	defer g.Unlock()
+
 	if g.gameStartTime.IsZero() {
 		screen.Fill(colorBlood)
 
@@ -915,18 +920,22 @@ func (g *game) Draw(screen *ebiten.Image) {
 		}
 		drawn = g.renderLevel(screen)
 	} else {
+		drawn += g.drawProjectiles(screen)
+
+		drawn += g.drawPlayer(screen)
+
 		// Draw game over screen.
 		img := ebiten.NewImage(g.w, g.h)
 		img.Fill(colorBlood)
 
-		a := g.forceColorScale
+		a := g.minLevelColorScale
 		if a == -1 {
 			a = 1
 		}
 
 		g.op.GeoM.Reset()
 		g.op.ColorM.Reset()
-		g.op.ColorM.Scale(a, a, a, 1)
+		g.op.ColorM.Scale(a, a, a, a)
 		screen.DrawImage(img, g.op)
 		g.op.ColorM.Reset()
 
@@ -935,7 +944,6 @@ func (g *game) Draw(screen *ebiten.Image) {
 		if time.Since(g.gameOverTime).Milliseconds()%2000 < 1500 {
 			g.drawText(screen, 0, 8, 4, a, "PRESS ENTER OR START TO PLAY AGAIN")
 		}
-
 	}
 
 	if g.gameOverTime.IsZero() {
@@ -959,7 +967,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 
 		scale := 3.0
 		soulsY := 104.0
-		if !g.level.exitOpen {
+		if g.level.exitOpenTime.IsZero() {
 			// Draw souls.
 			soulsLabel := fmt.Sprintf("%d", g.level.requiredSouls-g.player.soulsRescued)
 
@@ -970,8 +978,9 @@ func (g *game) Draw(screen *ebiten.Image) {
 			g.drawText(screen, 0, soulsY, scale, 1.0, soulsLabel)
 		} else {
 			// Draw exit message.
-			// TODO flash text
-			g.drawText(screen, 0, soulsY, scale, 1.0, "EXIT OPEN")
+			if time.Since(g.level.exitOpenTime).Milliseconds()%2000 < 1500 {
+				g.drawText(screen, 0, soulsY, scale, 1.0, "EXIT OPEN")
+			}
 		}
 	}
 
@@ -985,7 +994,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 	}
 
 	if !g.gameWon {
-		a := g.forceColorScale
+		a := g.minLevelColorScale
 		if a == -1 {
 			a = 1
 		}
@@ -1013,9 +1022,9 @@ func (g *game) tilePosition(x, y float64) (float64, float64) {
 }
 
 // renderSprite renders a sprite on the screen.
-func (g *game) renderSprite(x float64, y float64, offsetx float64, offsety float64, angle float64, scale float64, colorScale float64, alpha float64, sprite *ebiten.Image, target *ebiten.Image) int {
-	if g.forceColorScale != -1 {
-		colorScale = g.forceColorScale
+func (g *game) renderSprite(x float64, y float64, offsetx float64, offsety float64, angle float64, geoScale float64, colorScale float64, alpha float64, sprite *ebiten.Image, target *ebiten.Image) int {
+	if g.minLevelColorScale != -1 && colorScale < g.minLevelColorScale {
+		colorScale = g.minLevelColorScale
 	}
 
 	if alpha < .01 || colorScale < .01 {
@@ -1033,7 +1042,7 @@ func (g *game) renderSprite(x float64, y float64, offsetx float64, offsety float
 
 	g.op.GeoM.Reset()
 
-	g.op.GeoM.Scale(scale, scale)
+	g.op.GeoM.Scale(geoScale, geoScale)
 	// Rotate
 	g.op.GeoM.Translate(-16+offsetx, -16+offsety)
 	g.op.GeoM.Rotate(angle)
@@ -1057,81 +1066,48 @@ func (g *game) renderSprite(x float64, y float64, offsetx float64, offsety float
 }
 
 // Calculate color scale to apply shadows.
-func (g *game) colorScale(x, y float64) float64 {
-	if g.gameWon || g.fullBrightMode {
+func (g *game) levelColorScale(x, y float64) float64 {
+	if g.fullBrightMode {
 		return 1
 	}
 
-	v := colorScaleValue(x, y, g.player.x, g.player.y)
+	var v float64
+	if g.player.hasTorch {
+		v = colorScaleValue(x, y, g.player.x, g.player.y)
+	}
 
-	tileV := g.level.Tile(int(x), int(y)).colorScale
+	t := g.level.Tile(int(x), int(y))
+	if t == nil {
+		return 0
+	}
+	tileV := t.colorScale
 
 	s := math.Min(1, v+tileV)
 
 	return s
 }
 
-// renderLevel draws the current Level on the screen.
-func (g *game) renderLevel(screen *ebiten.Image) int {
+func (g *game) drawProjectiles(screen *ebiten.Image) int {
 	var drawn int
-
-	drawCreeps := func() {
-		for _, c := range g.level.creeps {
-			if c.health == 0 && c.creepType != TypeTorch {
-				continue
-			}
-
-			a := 1.0
-			if c.creepType == TypeSoul {
-				a = 0.35
-			}
-
-			drawn += g.renderSprite(c.x, c.y, 0, 0, c.angle, 1.0, g.colorScale(c.x, c.y), a, c.sprites[c.frame], screen)
-			if c.frames > 1 && time.Since(c.lastFrame) >= 75*time.Millisecond {
-				c.frame++
-				if c.frame == c.frames {
-					c.frame = 0
-				}
-				c.lastFrame = time.Now()
-			}
-		}
-
-	}
-
-	var t *Tile
-	for y := 0; y < g.level.h; y++ {
-		for x := 0; x < g.level.w; x++ {
-			t = g.level.tiles[y][x]
-			if t == nil {
-				continue // No tile at this position.
-			}
-
-			for i := range t.sprites {
-				drawn += g.renderSprite(float64(x), float64(y), 0, 0, 0, 1.0, g.colorScale(float64(x), float64(y)), 1.0, t.sprites[i], screen)
-			}
-		}
-	}
-
-	for _, item := range g.level.items {
-		if item.health == 0 {
-			continue
-		}
-
-		drawn += g.renderSprite(item.x, item.y, 0, 0, 0, 1.0, g.colorScale(item.x, item.y), 1.0, item.sprite, screen)
-	}
-
-	if !g.gameWon {
-		drawCreeps()
-	}
-
 	for _, p := range g.projectiles {
 		colorScale := p.colorScale
 		if colorScale == 1 {
-			colorScale = g.colorScale(p.x, p.y)
+			colorScale = g.levelColorScale(p.x, p.y)
 		}
 
-		drawn += g.renderSprite(p.x, p.y, 0, 0, p.angle, 1.0, colorScale, 1.0, imageAtlas[ImageBullet], screen)
+		alpha := 1.0
+		if g.gameWon {
+			//alpha = g.minLevelColorScale
+		}
+		// TODO if colorscale and gamewon, alpha is colorscale
+
+		drawn += g.renderSprite(p.x, p.y, 0, 0, p.angle, 1.0, colorScale, alpha, imageAtlas[ImageBullet], screen)
 	}
+	return drawn
+}
+
+func (g *game) drawPlayer(screen *ebiten.Image) int {
+	var drawn int
 
 	repelTime := g.player.garlicUntil.Sub(time.Now())
 	if repelTime > 0 && repelTime < 7*time.Second {
@@ -1155,6 +1131,11 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 		drawn += g.renderSprite(g.player.x+0.25, g.player.y+0.25, -offset, -offset, 0, scale, 1.0, alpha, imageAtlas[ImageHolyWater], screen)
 	}
 
+	var playerColorScale = g.levelColorScale(g.player.x, g.player.y)
+	if g.minPlayerColorScale != -1 {
+		playerColorScale = g.minPlayerColorScale
+	}
+
 	var weaponSprite *ebiten.Image
 
 	playerSprite := playerSS.Frame1
@@ -1163,7 +1144,7 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 	if g.player.weapon != nil {
 		weaponSprite = g.player.weapon.spriteFlipped
 	}
-	if g.player.angle > math.Pi/2 || g.player.angle < -1*math.Pi/2 {
+	if (g.player.angle > math.Pi/2 || g.player.angle < -1*math.Pi/2) && (g.gameOverTime.IsZero() || time.Since(g.gameOverTime) < 7*time.Second) {
 		playerSprite = playerSS.Frame2
 		playerAngle = playerAngle - math.Pi
 		mul = -1
@@ -1171,18 +1152,83 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 			weaponSprite = g.player.weapon.sprite
 		}
 	}
-	drawn += g.renderSprite(g.player.x, g.player.y, 0, 0, playerAngle, 1.0, 1.0, 1.0, playerSprite, screen)
+	drawn += g.renderSprite(g.player.x, g.player.y, 0, 0, playerAngle, 1.0, playerColorScale, 1.0, playerSprite, screen)
 	if g.player.weapon != nil {
-		drawn += g.renderSprite(g.player.x, g.player.y, 11*mul, 9, playerAngle, 1.0, 1.0, 1.0, weaponSprite, screen)
+		drawn += g.renderSprite(g.player.x, g.player.y, 11*mul, 9, playerAngle, 1.0, playerColorScale, 1.0, weaponSprite, screen)
 	}
 	if g.player.hasTorch {
-		drawn += g.renderSprite(g.player.x, g.player.y, -10*mul, 2, playerAngle, 1.0, 1.0, 1.0, sandstoneSS.TorchMulti, screen)
+		drawn += g.renderSprite(g.player.x, g.player.y, -10*mul, 2, playerAngle, 1.0, playerColorScale, 1.0, sandstoneSS.TorchMulti, screen)
 	}
 
 	flashDuration := 40 * time.Millisecond
 	if g.player.weapon != nil && time.Since(g.player.weapon.lastFire) < flashDuration {
-		drawn += g.renderSprite(g.player.x, g.player.y, 39, -1, g.player.angle, 1.0, 1.0, 1.0, imageAtlas[ImageMuzzleFlash], screen)
+		drawn += g.renderSprite(g.player.x, g.player.y, 39, -1, g.player.angle, 1.0, playerColorScale, 1.0, imageAtlas[ImageMuzzleFlash], screen)
 	}
+
+	return drawn
+}
+
+// renderLevel draws the current Level on the screen.
+func (g *game) renderLevel(screen *ebiten.Image) int {
+	var drawn int
+
+	drawCreeps := func() {
+		for _, c := range g.level.creeps {
+			if c.health == 0 && c.creepType != TypeTorch {
+				continue
+			}
+
+			a := 1.0
+			if c.creepType == TypeSoul {
+				a = 0.35
+			}
+
+			drawn += g.renderSprite(c.x, c.y, 0, 0, c.angle, 1.0, g.levelColorScale(c.x, c.y), a, c.sprites[c.frame], screen)
+			if c.frames > 1 && time.Since(c.lastFrame) >= 75*time.Millisecond {
+				c.frame++
+				if c.frame == c.frames {
+					c.frame = 0
+				}
+				c.lastFrame = time.Now()
+			}
+		}
+	}
+
+	if g.gameWon {
+		drawn += g.drawProjectiles(screen)
+	}
+
+	var t *Tile
+	for y := 0; y < g.level.h; y++ {
+		for x := 0; x < g.level.w; x++ {
+			t = g.level.tiles[y][x]
+			if t == nil {
+				continue // No tile at this position.
+			}
+
+			for i := range t.sprites {
+				drawn += g.renderSprite(float64(x), float64(y), 0, 0, 0, 1.0, g.levelColorScale(float64(x), float64(y)), 1.0, t.sprites[i], screen)
+			}
+		}
+	}
+
+	for _, item := range g.level.items {
+		if item.health == 0 {
+			continue
+		}
+
+		drawn += g.renderSprite(item.x, item.y, 0, 0, 0, 1.0, g.levelColorScale(item.x, item.y), 1.0, item.sprite, screen)
+	}
+
+	if !g.gameWon {
+		drawCreeps()
+	}
+
+	if !g.gameWon {
+		drawn += g.drawProjectiles(screen)
+	}
+
+	drawn += g.drawPlayer(screen)
 
 	if g.gameWon {
 		drawCreeps()
@@ -1334,9 +1380,7 @@ func (g *game) showWinScreen() {
 		return
 	}
 
-	// TODO make it a sunrise instead
-
-	g.forceColorScale = 0.4
+	g.minLevelColorScale = 0.4
 
 	g.gameWon = true
 	g.gameOverTime = time.Now()
@@ -1349,8 +1393,6 @@ func (g *game) showWinScreen() {
 
 	g.level = newWinLevel(g.player)
 
-	// TODO move win screen background upward
-
 	g.winScreenBackground = ebiten.NewImage(g.w, g.h)
 	g.winScreenBackground.Fill(colornames.Deepskyblue)
 
@@ -1361,6 +1403,207 @@ func (g *game) showWinScreen() {
 	g.winScreenSunY = float64(g.h/2) + float64(sunSize/2)
 
 	go func() {
+		p := g.player
+		l := g.level
+
+		var stars []*projectile
+
+		addStar := func() {
+			star := &projectile{
+				x:          p.x + (0.5-rand.Float64())*66,
+				y:          p.y + (0.5-rand.Float64())*66,
+				colorScale: rand.Float64(),
+			}
+			g.projectiles = append(g.projectiles, star)
+			stars = append(stars, star)
+		}
+
+		lastPlayerX := p.x
+		updateStars := func() {
+			if p.x == lastPlayerX {
+				return
+			}
+
+			for _, star := range stars {
+				star.x = p.x - (lastPlayerX - star.x)
+			}
+			lastPlayerX = p.x
+		}
+
+		// Add stars.
+		numStars := 666
+		for i := 0; i < numStars; i++ {
+			addStar()
+		}
+
+		// Walk away.
+		for i := 0; i < 36; i++ {
+			p.x += 0.05
+			updateStars()
+			time.Sleep(time.Second / 144)
+		}
+		for i := 0; i < 288; i++ {
+			p.x += 0.05 * (float64(288-i) / 288)
+			updateStars()
+
+			time.Sleep(time.Second / 144)
+		}
+
+		// Turn around.
+		p.angle = math.Pi
+		time.Sleep(time.Millisecond * 1750)
+
+		// Throw weapon.
+		weaponSprite := newCreep(TypeTorch, l, p)
+		weaponSprite.x, weaponSprite.y = p.x, p.y
+		weaponSprite.frames = 1
+		weaponSprite.frame = 0
+		weaponSprite.sprites = []*ebiten.Image{
+			imageAtlas[ImageUzi],
+		}
+
+		p.weapon = nil
+		l.creeps = append(l.creeps, weaponSprite)
+
+		startX := 108
+
+		doorX := float64(startX) - 0.4
+
+		go func() {
+			for i := 0; i < 144*2; i++ {
+				if weaponSprite.x < doorX {
+					for i, c := range l.creeps {
+						if c == weaponSprite {
+							l.creeps = append(l.creeps[:i], l.creeps[i+1:]...)
+						}
+					}
+					return
+				}
+
+				weaponSprite.x -= 0.05
+				if i < 100 {
+					weaponSprite.y -= 0.005 * (float64(144-i) / 144)
+				} else {
+					weaponSprite.y += 0.01 * (float64(288-i) / 288)
+				}
+				weaponSprite.angle -= .1
+				time.Sleep(time.Second / 144)
+			}
+		}()
+
+		time.Sleep(time.Second / 2)
+
+		// Throw torch.
+		torchSprite := newCreep(TypeTorch, l, p)
+		torchSprite.x, torchSprite.y = p.x, p.y
+		torchSprite.frames = 1
+		torchSprite.frame = 0
+		torchSprite.sprites = []*ebiten.Image{
+			sandstoneSS.TorchMulti,
+		}
+
+		p.hasTorch = false
+		l.creeps = append(l.creeps, torchSprite)
+		l.torches = append(l.torches, torchSprite)
+		l.bakePartialLightmap(int(torchSprite.x), int(torchSprite.y))
+
+		go func() {
+			lastTorchX := torchSprite.x
+
+			for i := 0; i < 144*3; i++ {
+				if torchSprite.x < doorX {
+					for i, c := range l.creeps {
+						if c == torchSprite {
+							l.creeps = append(l.creeps[:i], l.creeps[i+1:]...)
+							l.torches = nil
+						}
+					}
+				}
+
+				torchSprite.x -= 0.05
+				if i < 100 {
+					torchSprite.y -= 0.005 * (float64(144-i) / 144)
+				} else {
+					torchSprite.y += 0.01 * (float64(288-i) / 288)
+				}
+
+				if lastTorchX-torchSprite.x >= 0.1 {
+					l.bakePartialLightmap(int(torchSprite.x), int(torchSprite.y))
+					lastTorchX = torchSprite.x
+				}
+
+				torchSprite.angle -= .1
+				time.Sleep(time.Second / 144)
+			}
+		}()
+
+		// Walk away.
+		time.Sleep(time.Second)
+
+		p.angle = 0
+		for i := 0; i < 144; i++ {
+			p.x += 0.05 * (float64(i) / 144)
+			// Fade out stars.
+			for _, star := range stars {
+				star.colorScale -= 0.01
+				if star.colorScale < 0 {
+					star.colorScale = 0
+				}
+			}
+			updateStars()
+			time.Sleep(time.Second / 144)
+		}
+
+		var removedExistingStars bool
+
+		var addedStars bool
+
+		for i := 0; i < 144*20; i++ {
+			if p.health > 0 {
+				// Game has restarted.
+				return
+			}
+
+			if i > int(144*3.5) {
+				if !removedExistingStars {
+					// Remove existing stars.
+					stars = nil
+					g.projectiles = nil
+
+					removedExistingStars = true
+				}
+			}
+
+			if i > int(144*12) {
+				p.angle += 0.0025 * (float64((144*5)-i) / (144 * 5))
+
+				addStar()
+				addStar()
+				addStar()
+				addStar()
+				_ = addedStars
+			}
+
+			p.x += 0.05
+			updateStars()
+
+			if i > 144*11 {
+				for _, star := range stars {
+					pct := float64((144*7)-i) / 144 * 7
+
+					star.x -= 0.05 * pct / 50
+
+					// Apply warp effect.
+					dx, dy := deltaXY(g.player.x, g.player.y, star.x, star.y)
+					star.x, star.y = star.x+(dx/100)*pct/1000, star.y+(dy/100)*pct/1000
+				}
+			}
+
+			time.Sleep(time.Second / 144)
+		}
+	}()
+
+	go func() {
 		// Animate sunrise.
 		go func() {
 			time.Sleep(5 * time.Second)
@@ -1368,9 +1611,9 @@ func (g *game) showWinScreen() {
 				g.winScreenSunY -= 0.035
 
 				if i > int(144*3.5) {
-					g.forceColorScale += 0.0005
-					if g.forceColorScale > 1 {
-						g.forceColorScale = 1
+					g.minLevelColorScale += 0.0005
+					if g.minLevelColorScale > 1 {
+						g.minLevelColorScale = 1
 					}
 				}
 
@@ -1385,22 +1628,36 @@ func (g *game) showWinScreen() {
 			time.Sleep(time.Second / 144)
 		}
 
-		time.Sleep(5 * time.Second)
+		time.Sleep(4 * time.Second)
 
 		// Fade out win screen.
 
-		for i := 0; i < 144; i++ {
-			g.winScreenColorScale -= 0.01
-			g.forceColorScale -= 0.01
+		for i := 0; i < 144*2; i++ {
+			g.winScreenColorScale -= 0.005
+			g.minLevelColorScale -= 0.005
+			if g.minLevelColorScale > 0.6 {
+				g.minPlayerColorScale = g.minLevelColorScale
+			}
 			time.Sleep(time.Second / 144)
 		}
+
+		g.Lock()
+		for y := 0; y < g.level.h; y++ {
+			for x := 0; x < g.level.w; x++ {
+				g.level.tiles[y][x].sprites = nil
+			}
+		}
+		g.Unlock()
+
+		time.Sleep(6 * time.Second)
 
 		// Fade in game over screen.
 
 		g.gameWon = false
 
 		defer func() {
-			g.forceColorScale = -1
+			g.minLevelColorScale = -1
+			g.minPlayerColorScale = -1
 			g.updateCursor()
 		}()
 
@@ -1408,7 +1665,9 @@ func (g *game) showWinScreen() {
 			if g.player.health > 0 {
 				return
 			}
-			g.forceColorScale = i
+			if i <= 1 {
+				g.minLevelColorScale = i
+			}
 			time.Sleep(time.Second / 144)
 		}
 	}()
