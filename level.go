@@ -98,14 +98,11 @@ SPAWNLOCATION:
 
 // NewLevel returns a new randomly generated Level.
 func NewLevel(levelNum int, p *gamePlayer) (*Level, error) {
-	multiplier := levelNum
-	if multiplier > 2 {
-		multiplier = 2
-	}
+	div := 4 - levelNum
 	l := &Level{
 		num:      levelNum,
-		w:        336 * multiplier,
-		h:        336 * multiplier,
+		w:        336 / div,
+		h:        336 / div,
 		tileSize: 32,
 		player:   p,
 	}
@@ -124,9 +121,9 @@ func NewLevel(levelNum int, p *gamePlayer) (*Level, error) {
 	}
 
 	rooms := 33
-	if multiplier == 2 {
+	/*if multiplier == 2 {
 		rooms = 66
-	}
+	}*/
 	d := dungeon.NewDungeon(l.w/dungeonScale, rooms)
 	dungeonFloor := 1
 	l.tiles = make([][]*Tile, l.h)

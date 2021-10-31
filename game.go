@@ -34,15 +34,14 @@ const (
 	playerDieVolume  = 1.6
 	munchVolume      = 0.8
 
-	spawnVampire = 777
-	spawnGarlic  = 6
+	spawnGarlic = 6
 
 	garlicActiveTime    = 7 * time.Second
 	holyWaterActiveTime = time.Second
 
-	maxCreeps = 3333 // TODO optimize and raise
-
 	batSoundDelay = 250 * time.Millisecond
+
+	screenPadding = 33
 )
 
 var startButtons = []ebiten.StandardGamepadButton{
@@ -270,7 +269,13 @@ func (g *game) generateLevel() error {
 	g.level.items = append(g.level.items, item)
 
 	// Spawn creeps.
-	for i := 0; i < spawnVampire; i++ {
+	spawnAmount := 66
+	if g.levelNum == 2 {
+		spawnAmount = 666
+	} else if g.levelNum == 3 {
+		spawnAmount = 1111
+	}
+	for i := 0; i < spawnAmount; i++ {
 		g.level.addCreep(TypeVampire)
 	}
 	return nil
@@ -348,8 +353,6 @@ func (g *game) handlePlayerDeath() {
 	if g.player.health > 0 {
 		return
 	}
-
-	g.player.holyWaters = 0
 
 	g.gameOverTime = time.Now()
 
@@ -468,29 +471,23 @@ func (g *game) Update() error {
 				}
 				g.checkLevelComplete()
 			} else if !g.godMode && !c.repelled() {
-				if g.player.holyWaters > 0 {
-					// TODO g.playSound(SoundItemUseHolyWater, useholyWaterVolume)
-					g.player.holyWaterUntil = time.Now().Add(holyWaterActiveTime)
-					g.player.holyWaters--
-				} else {
-					err := g.hurtCreep(c, -1)
-					if err != nil {
-						// TODO
-						panic(err)
-					}
-
-					g.player.health--
-
-					if g.player.health == 2 {
-						g.playSound(SoundPlayerHurt, playerHurtVolume/2)
-					} else if g.player.health == 1 {
-						g.playSound(SoundPlayerHurt, playerHurtVolume)
-					}
-
-					g.addBloodSplatter(g.player.x, g.player.y)
-
-					g.handlePlayerDeath()
+				err := g.hurtCreep(c, -1)
+				if err != nil {
+					// TODO
+					panic(err)
 				}
+
+				g.player.health--
+
+				if g.player.health == 2 {
+					g.playSound(SoundPlayerHurt, playerHurtVolume/2)
+				} else if g.player.health == 1 {
+					g.playSound(SoundPlayerHurt, playerHurtVolume)
+				}
+
+				g.addBloodSplatter(g.player.x, g.player.y)
+
+				g.handlePlayerDeath()
 			}
 		} else if c.creepType == TypeBat && (dx <= 12 && dy <= 7) && rand.Intn(166) == 6 && time.Since(g.lastBatSound) >= batSoundDelay {
 			g.playSound(SoundBat, batDieVolume)
@@ -581,8 +578,8 @@ func (g *game) Update() error {
 				g.playSound(SoundMunch, munchVolume)
 				g.player.garlicUntil = time.Now().Add(garlicActiveTime)
 			} else if item.itemType == itemTypeHolyWater {
-				// TODO g.playSound(SoundItemPickup, munchVolume)
-				g.player.holyWaters++
+				// TODO g.playSound(SoundItemPickup, pickupVolume)
+				g.player.health++
 			}
 		}
 	}
@@ -720,11 +717,23 @@ UPDATEPROJECTILES:
 		}
 	}
 
+	maxCreeps := 666
+	if g.levelNum == 2 {
+		maxCreeps = 1999
+	} else if g.levelNum == 3 {
+		maxCreeps = 3333
+	}
 	if len(g.level.creeps) < maxCreeps {
 		// Spawn vampires.
 		if g.tick%144 == 0 {
 			spawnAmount := rand.Intn(26 + (g.tick / (144 * 3)))
-			if len(g.level.creeps) < 500 {
+			minCreeps := 0
+			if g.levelNum == 2 {
+				minCreeps = 500
+			} else if g.levelNum == 3 {
+				minCreeps = 1000
+			}
+			if len(g.level.creeps) < minCreeps {
 				spawnAmount *= 4
 			}
 			if g.debugMode && spawnAmount > 0 {
@@ -851,8 +860,8 @@ UPDATEPROJECTILES:
 			}
 			g.flashMessage(fmt.Sprintf("SPAWNED %d GHOSTS", spawnAmount))
 		case inpututil.IsKeyJustPressed(ebiten.Key7):
-			g.player.holyWaters++
-			g.flashMessage("SPAWNED HOLY WATER")
+			g.player.health++
+			g.flashMessage("INCREASED HEALTH")
 		case inpututil.IsKeyJustPressed(ebiten.Key8):
 			// TODO Add garlic to inventory
 			//g.flashMessage("+ GARLIC")
@@ -872,7 +881,18 @@ UPDATEPROJECTILES:
 	return nil
 }
 
-func (g *game) drawText(target *ebiten.Image, offsetX float64, y float64, scale float64, alpha float64, text string) {
+func (g *game) drawText(target *ebiten.Image, x float64, y float64, scale float64, alpha float64, text string) {
+	g.overlayImg.Clear()
+	ebitenutil.DebugPrint(g.overlayImg, text)
+	g.op.GeoM.Reset()
+	g.op.GeoM.Scale(scale, scale)
+	g.op.GeoM.Translate(x, y)
+	g.op.ColorM.Scale(1, 1, 1, alpha)
+	target.DrawImage(g.overlayImg, g.op)
+	g.op.ColorM.Reset()
+}
+
+func (g *game) drawCenteredText(target *ebiten.Image, offsetX float64, y float64, scale float64, alpha float64, text string) {
 	g.overlayImg.Clear()
 	ebitenutil.DebugPrint(g.overlayImg, text)
 	g.op.GeoM.Reset()
@@ -891,14 +911,14 @@ func (g *game) Draw(screen *ebiten.Image) {
 	if g.gameStartTime.IsZero() {
 		screen.Fill(colorBlood)
 
-		g.drawText(screen, 0, float64(g.h/2)-350, 16, 1.0, "CAROTID")
-		g.drawText(screen, 0, float64(g.h/2)-100, 16, 1.0, "ARTILLERY")
+		g.drawCenteredText(screen, 0, float64(g.h/2)-350, 16, 1.0, "CAROTID")
+		g.drawCenteredText(screen, 0, float64(g.h/2)-100, 16, 1.0, "ARTILLERY")
 
-		g.drawText(screen, 0, float64(g.h-210), 4, 1.0, "WASD + MOUSE = OK")
-		g.drawText(screen, 0, float64(g.h-145), 4, 1.0, "FULLSCREEN + GAMEPAD = BEST")
+		g.drawCenteredText(screen, 0, float64(g.h-210), 4, 1.0, "WASD + MOUSE = OK")
+		g.drawCenteredText(screen, 0, float64(g.h-145), 4, 1.0, "FULLSCREEN + GAMEPAD = BEST")
 
 		if time.Now().UnixMilli()%2000 < 1500 {
-			g.drawText(screen, 0, float64(g.h-80), 4, 1.0, "PRESS ANY KEY OR BUTTON TO START")
+			g.drawCenteredText(screen, 0, float64(g.h-80), 4, 1.0, "PRESS ANY KEY OR BUTTON TO START")
 		}
 
 		return
@@ -942,47 +962,46 @@ func (g *game) Draw(screen *ebiten.Image) {
 		screen.DrawImage(img, g.op)
 		g.op.ColorM.Reset()
 
-		g.drawText(screen, 0, float64(g.h/2)-150, 16, a, "GAME OVER")
+		g.drawCenteredText(screen, 0, float64(g.h/2)-150, 16, a, "GAME OVER")
 
 		if time.Since(g.gameOverTime).Milliseconds()%2000 < 1500 {
-			g.drawText(screen, 0, 8, 4, a, "PRESS ENTER OR START TO PLAY AGAIN")
+			g.drawCenteredText(screen, 0, 8, 4, a, "PRESS ENTER OR START TO PLAY AGAIN")
 		}
 	}
 
 	if g.gameOverTime.IsZero() {
 		// Draw health.
-		heartSpace := 32
-		heartX := (g.w / 2) - ((heartSpace * g.player.health) / 2)
+		healthScale := 1.3
+		heartSpace := int(32 * healthScale)
+		heartY := float64(g.h - screenPadding - heartSpace)
 		for i := 0; i < g.player.health; i++ {
 			g.op.GeoM.Reset()
-			g.op.GeoM.Translate(float64(heartX+(i*heartSpace)), 32)
+			g.op.GeoM.Scale(healthScale, healthScale)
+			g.op.GeoM.Translate(screenPadding+(float64((i)*heartSpace)), heartY)
 			screen.DrawImage(imageAtlas[ImageHeart], g.op)
 		}
 
-		// Draw holy waters.
-		holyWaterSpace := 16
-		holyWaterX := (g.w / 2) - ((holyWaterSpace * g.player.holyWaters) / 2) - 8
-		for i := 0; i < g.player.holyWaters; i++ {
-			g.op.GeoM.Reset()
-			g.op.GeoM.Translate(float64(holyWaterX+(i*holyWaterSpace)), 76)
-			screen.DrawImage(imageAtlas[ImageHolyWater], g.op)
-		}
-
-		scale := 3.0
-		soulsY := 104.0
+		scale := 4.0
+		soulsY := float64(g.h-int(scale*14)) - screenPadding
 		if g.level.exitOpenTime.IsZero() {
 			// Draw souls.
 			soulsLabel := fmt.Sprintf("%d", g.level.requiredSouls-g.player.soulsRescued)
 
+			soulImgSize := 50.0
+
+			soulsX := float64(g.w-screenPadding) - (float64((len(soulsLabel)) * 4 * 6)) - soulImgSize
+
+			soulImgScale := 1.5
 			g.op.GeoM.Reset()
-			g.op.GeoM.Translate(float64(g.w/2)-(float64(len(soulsLabel))*3*scale)-40, soulsY+8)
+			g.op.GeoM.Translate((soulsX+soulImgSize)/soulImgScale, (soulsY+9)/soulImgScale)
+			g.op.GeoM.Scale(soulImgScale, soulImgScale)
 			screen.DrawImage(ojasDungeonSS.Soul1, g.op)
 
-			g.drawText(screen, 0, soulsY, scale, 1.0, soulsLabel)
+			g.drawText(screen, soulsX, soulsY, scale, 1.0, soulsLabel)
 		} else {
 			// Draw exit message.
 			if time.Since(g.level.exitOpenTime).Milliseconds()%2000 < 1500 {
-				g.drawText(screen, 0, soulsY, scale, 1.0, "EXIT OPEN")
+				g.drawCenteredText(screen, 0, soulsY, scale, 1.0, "EXIT OPEN")
 			}
 		}
 	}
@@ -993,16 +1012,17 @@ func (g *game) Draw(screen *ebiten.Image) {
 		if alpha > 1 {
 			alpha = 1
 		}
-		g.drawText(screen, 0, float64(g.h-40), 2, alpha, g.flashMessageText)
+		g.drawCenteredText(screen, 0, float64(g.h-screenPadding-32), 2, alpha, g.flashMessageText)
 	}
 
-	if !g.gameWon {
+	if !g.gameOverTime.IsZero() && !g.gameWon {
 		a := g.minLevelColorScale
 		if a == -1 {
 			a = 1
 		}
+		scale := 5
 		scoreLabel := numberPrinter.Sprintf("%d", g.player.score)
-		g.drawText(screen, 0, float64(g.h-150), 8, a, scoreLabel)
+		g.drawCenteredText(screen, 0, float64(g.h-(scale*14))-screenPadding, float64(scale), a, scoreLabel)
 	}
 
 	if !g.debugMode {
@@ -1183,7 +1203,7 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 
 			a := 1.0
 			if c.creepType == TypeSoul {
-				a = 0.35
+				a = 0.3
 			}
 
 			drawn += g.renderSprite(c.x, c.y, 0, 0, c.angle, 1.0, g.levelColorScale(c.x, c.y), a, c.sprites[c.frame], screen)
@@ -1571,15 +1591,12 @@ func (g *game) showWinScreen() {
 				}
 			}
 
-			if i > int(144*12) {
+			if i > 144*12 {
 				p.angle -= 0.0025 * (float64(i-(144*12)) / (144 * 3))
 
-				addStar()
-				addStar()
-				addStar()
-				addStar()
-				addStar()
-				addStar()
+				for j := 0; j < 6; j++ {
+					addStar()
+				}
 			}
 
 			p.x += 0.05

@@ -24,8 +24,6 @@ type gamePlayer struct {
 
 	health int
 
-	holyWaters int
-
 	garlicUntil    time.Time
 	holyWaterUntil time.Time
 }
