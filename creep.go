@@ -140,7 +140,7 @@ func (c *gameCreep) moveSpeed() float64 {
 	if c.creepType == TypeSoul {
 		return 0.5 / 4
 	}
-	return 0.4
+	return 0.1 + (float64(c.level.num) * 0.1)
 }
 
 func (c *gameCreep) seekPlayer() {

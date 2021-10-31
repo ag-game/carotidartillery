@@ -13,5 +13,6 @@ func parseFlags(g *game) {
 	flag.BoolVar(&g.fullBrightMode, "fullbright", false, "Enable fullbright mode")
 	flag.BoolVar(&g.debugMode, "debug", false, "Enable debug mode")
 	flag.BoolVar(&g.muteAudio, "mute", false, "Mute audio")
+	flag.IntVar(&g.levelNum, "level", 0, "Warp to level")
 	flag.Parse()
 }

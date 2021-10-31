@@ -142,7 +142,6 @@ func NewGame() (*game, error) {
 		activeGamepad:       -1,
 		minLevelColorScale:  -1,
 		minPlayerColorScale: -1,
-		levelNum:            1,
 
 		op: &ebiten.DrawImageOptions{},
 	}
@@ -461,6 +460,7 @@ func (g *game) Update() error {
 		if dx <= biteThreshold && dy <= biteThreshold {
 			if c.creepType == TypeSoul {
 				g.player.soulsRescued++
+				g.player.score += 13
 				err := g.hurtCreep(c, -1)
 				if err != nil {
 					// TODO
@@ -753,7 +753,7 @@ UPDATEPROJECTILES:
 		}
 
 		// Spawn ghosts.
-		if g.tick%1872 == 0 {
+		if false && g.tick%1872 == 0 { // Auto-spawn disabled.
 			spawnAmount := g.tick / 1872
 			if spawnAmount < 1 {
 				spawnAmount = 1
@@ -907,14 +907,17 @@ func (g *game) Draw(screen *ebiten.Image) {
 	var drawn int
 	if g.gameOverTime.IsZero() || g.gameWon {
 		if g.gameWon {
+			g.drawProjectiles(screen)
+
 			g.op.GeoM.Reset()
 			g.op.ColorM.Reset()
-			g.op.ColorM.Scale(g.winScreenColorScale, g.winScreenColorScale, g.winScreenColorScale, 1)
+			g.op.ColorM.Scale(1, 1, 1, g.winScreenColorScale)
 			screen.DrawImage(g.winScreenBackground, g.op)
+
 			g.op.GeoM.Reset()
 			g.op.GeoM.Translate(float64(g.w)*0.75, g.winScreenSunY)
 			g.op.ColorM.Reset()
-			g.op.ColorM.Scale(g.winScreenColorScale, g.winScreenColorScale, g.winScreenColorScale, 1)
+			g.op.ColorM.Scale(g.winScreenColorScale, g.winScreenColorScale, g.winScreenColorScale, g.winScreenColorScale)
 			screen.DrawImage(g.winScreenSun, g.op)
 			g.op.ColorM.Reset()
 		}
@@ -1192,10 +1195,6 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 				c.lastFrame = time.Now()
 			}
 		}
-	}
-
-	if g.gameWon {
-		drawn += g.drawProjectiles(screen)
 	}
 
 	var t *Tile
@@ -1556,15 +1555,13 @@ func (g *game) showWinScreen() {
 
 		var removedExistingStars bool
 
-		var addedStars bool
-
-		for i := 0; i < 144*20; i++ {
+		for i := 0; i < 144*25; i++ {
 			if p.health > 0 {
 				// Game has restarted.
 				return
 			}
 
-			if i > int(144*3.5) {
+			if i > int(144*7) {
 				if !removedExistingStars {
 					// Remove existing stars.
 					stars = nil
@@ -1575,13 +1572,14 @@ func (g *game) showWinScreen() {
 			}
 
 			if i > int(144*12) {
-				p.angle += 0.0025 * (float64((144*5)-i) / (144 * 5))
+				p.angle -= 0.0025 * (float64(i-(144*12)) / (144 * 3))
 
 				addStar()
 				addStar()
 				addStar()
 				addStar()
-				_ = addedStars
+				addStar()
+				addStar()
 			}
 
 			p.x += 0.05
@@ -1589,13 +1587,14 @@ func (g *game) showWinScreen() {
 
 			if i > 144*11 {
 				for _, star := range stars {
-					pct := float64((144*7)-i) / 144 * 7
+					pct := float64((144*15)-i) / 144 * 7
 
-					star.x -= 0.05 * pct / 50
+					star.x -= 0.1 * pct / 50
 
 					// Apply warp effect.
+					div := 100.0
 					dx, dy := deltaXY(g.player.x, g.player.y, star.x, star.y)
-					star.x, star.y = star.x+(dx/100)*pct/1000, star.y+(dy/100)*pct/1000
+					star.x, star.y = star.x-(dx/100)*pct/div-0.025, star.y+(dy/100)*pct/div-0.01
 				}
 			}
 
@@ -1649,7 +1648,7 @@ func (g *game) showWinScreen() {
 		}
 		g.Unlock()
 
-		time.Sleep(6 * time.Second)
+		time.Sleep(7 * time.Second)
 
 		// Fade in game over screen.
 

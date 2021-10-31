@@ -28,15 +28,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	err = g.reset()
-	if err != nil {
-		panic(err)
-	}
-
 	parseFlags(g)
-	if !g.debugMode {
-		g.gameStartTime = time.Time{}
-	}
 
 	sigc := make(chan os.Signal, 1)
 	signal.Notify(sigc,
@@ -47,6 +39,28 @@ func main() {
 
 		g.exit()
 	}()
+
+	// Handle warp.
+	if g.levelNum > 0 {
+		warpTo := g.levelNum
+		go func() {
+			time.Sleep(2 * time.Second)
+			g.Lock()
+			defer g.Unlock()
+
+			g.reset()
+			g.levelNum = warpTo - 1
+			g.nextLevel()
+		}()
+	}
+
+	err = g.reset()
+	if err != nil {
+		panic(err)
+	}
+	if !g.debugMode {
+		g.gameStartTime = time.Time{}
+	}
 
 	err = ebiten.RunGame(g)
 	if err != nil {

@@ -13,6 +13,8 @@ const dungeonScale = 4
 
 // Level represents a game level.
 type Level struct {
+	num int
+
 	w, h int
 
 	tiles    [][]*Tile // (Y,X) array of tiles
@@ -101,6 +103,7 @@ func NewLevel(levelNum int, p *gamePlayer) (*Level, error) {
 		multiplier = 2
 	}
 	l := &Level{
+		num:      levelNum,
 		w:        336 * multiplier,
 		h:        336 * multiplier,
 		tileSize: 32,
