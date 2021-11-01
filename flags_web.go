@@ -4,5 +4,5 @@
 package main
 
 func parseFlags(g *game) {
-	// Do nothing
+	g.disableEsc = true
 }

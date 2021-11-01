@@ -29,19 +29,21 @@ var colorBlood = color.RGBA{102, 0, 0, 255}
 const (
 	gunshotVolume    = 0.2
 	vampireDieVolume = 0.15
-	batDieVolume     = 1.5
+	batVolume        = 1.0
 	playerHurtVolume = 0.4
 	playerDieVolume  = 1.6
-	munchVolume      = 0.8
+	pickupVolume     = 0.8
+	munchVolume      = 0.6
 
-	spawnGarlic = 6
+	spawnGarlic = 3
 
-	garlicActiveTime    = 7 * time.Second
-	holyWaterActiveTime = time.Second
+	garlicActiveTime = 7 * time.Second
 
 	batSoundDelay = 250 * time.Millisecond
 
 	screenPadding = 33
+
+	startingHealth = 3
 )
 
 var startButtons = []ebiten.StandardGamepadButton{
@@ -71,6 +73,8 @@ type projectile struct {
 	color      color.Color
 	colorScale float64
 }
+
+var blackSquare = ebiten.NewImage(32, 32)
 
 // game is an isometric demo game.
 type game struct {
@@ -119,6 +123,8 @@ type game struct {
 	minLevelColorScale  float64
 	minPlayerColorScale float64
 
+	disableEsc bool
+
 	godMode        bool
 	noclipMode     bool
 	muteAudio      bool
@@ -156,6 +162,8 @@ func NewGame() (*game, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	blackSquare.Fill(color.Black)
 
 	return g, nil
 }
@@ -235,7 +243,7 @@ func (g *game) generateLevel() error {
 
 	// Position player.
 	if g.levelNum > 1 {
-		g.player.x, g.player.y = float64(g.level.enterX), float64(g.level.enterY)+1
+		g.player.x, g.player.y = float64(g.level.enterX)+0.5, float64(g.level.enterY)-0.5
 	} else {
 		for {
 			g.player.x, g.player.y = float64(rand.Intn(g.level.w)), float64(rand.Intn(g.level.h))
@@ -247,7 +255,7 @@ func (g *game) generateLevel() error {
 
 	// Spawn items.
 	g.level.items = nil
-	for i := 0; i < spawnGarlic; i++ {
+	for i := 0; i < spawnGarlic*g.levelNum; i++ {
 		itemType := itemTypeGarlic
 		c := g.newItem(itemType)
 		g.level.items = append(g.level.items, c)
@@ -268,12 +276,12 @@ func (g *game) generateLevel() error {
 	}
 	g.level.items = append(g.level.items, item)
 
-	// Spawn creeps.
+	// Spawn starting creeps.
 	spawnAmount := 66
 	if g.levelNum == 2 {
-		spawnAmount = 666
+		spawnAmount = 133
 	} else if g.levelNum == 3 {
-		spawnAmount = 1111
+		spawnAmount = 333
 	}
 	for i := 0; i < spawnAmount; i++ {
 		g.level.addCreep(TypeVampire)
@@ -313,7 +321,7 @@ func (g *game) reset() error {
 	g.player.soulsRescued = 0
 
 	// Reset player health.
-	g.player.health = 3
+	g.player.health = startingHealth
 
 	return nil
 }
@@ -372,11 +380,36 @@ func (g *game) checkLevelComplete() {
 	}
 	g.level.exitOpenTime = time.Now()
 
-	g.level.tiles[g.level.exitY][g.level.exitX].sprites = nil
-	g.level.tiles[g.level.exitY][g.level.exitX].AddSprite(sandstoneSS.FloorA)
-	g.level.tiles[g.level.exitY][g.level.exitX].AddSprite(sandstoneSS.DoorOpen)
+	// TODO preserve existing floor sprite
 
-	// TODO widen doorway
+	t := g.level.tiles[g.level.exitY][g.level.exitX]
+	t.sprites = nil
+	t.AddSprite(sandstoneSS.FloorA)
+	t.AddSprite(sandstoneSS.TopDoorOpenTL)
+
+	t = g.level.tiles[g.level.exitY][g.level.exitX+1]
+	t.sprites = nil
+	t.AddSprite(sandstoneSS.FloorA)
+	t.AddSprite(sandstoneSS.TopDoorOpenTR)
+
+	t = g.level.tiles[g.level.exitY+1][g.level.exitX]
+	t.sprites = nil
+	t.AddSprite(sandstoneSS.FloorA)
+	t.AddSprite(sandstoneSS.TopDoorOpenBL)
+
+	t = g.level.tiles[g.level.exitY+1][g.level.exitX+1]
+	t.sprites = nil
+	t.AddSprite(sandstoneSS.FloorA)
+	t.AddSprite(sandstoneSS.TopDoorOpenBR)
+
+	for i := 1; i < 3; i++ {
+		t = g.level.tiles[g.level.exitY-i][g.level.exitX]
+		t.forceColorScale = 0
+
+		t = g.level.tiles[g.level.exitY-i][g.level.exitX+1]
+		t.forceColorScale = 0
+	}
+
 	// TODO add trigger entity or hardcode check
 }
 
@@ -387,7 +420,7 @@ func (g *game) Update() error {
 
 	gamepadDeadZone := 0.1
 
-	if ebiten.IsKeyPressed(ebiten.KeyEscape) || ebiten.IsWindowBeingClosed() {
+	if (!g.disableEsc && ebiten.IsKeyPressed(ebiten.KeyEscape)) || ebiten.IsWindowBeingClosed() {
 		g.exit()
 		return nil
 	}
@@ -490,7 +523,7 @@ func (g *game) Update() error {
 				g.handlePlayerDeath()
 			}
 		} else if c.creepType == TypeBat && (dx <= 12 && dy <= 7) && rand.Intn(166) == 6 && time.Since(g.lastBatSound) >= batSoundDelay {
-			g.playSound(SoundBat, batDieVolume)
+			g.playSound(SoundBat, batVolume)
 			g.lastBatSound = time.Now()
 		}
 
@@ -578,7 +611,7 @@ func (g *game) Update() error {
 				g.playSound(SoundMunch, munchVolume)
 				g.player.garlicUntil = time.Now().Add(garlicActiveTime)
 			} else if item.itemType == itemTypeHolyWater {
-				// TODO g.playSound(SoundItemPickup, pickupVolume)
+				g.playSound(SoundPickup, pickupVolume)
 				g.player.health++
 			}
 		}
@@ -687,7 +720,7 @@ UPDATEPROJECTILES:
 	if g.tick%200 == 0 {
 		removed = 0
 		for i, creep := range g.level.creeps {
-			if creep.health != 0 || creep.creepType == TypeTorch {
+			if creep.health != 0 || creep.creepType == TypeTorch || creep.creepType == TypeSoul {
 				continue
 			}
 
@@ -698,9 +731,23 @@ UPDATEPROJECTILES:
 	}
 
 	// Spawn garlic.
-	if g.tick%(144*45) == 0 || rand.Intn(666) == 0 {
+	if (g.tick > 0 && g.tick%(144*45) == 0) || rand.Intn(6666) == 0 {
 		item := g.newItem(itemTypeGarlic)
 		g.level.items = append(g.level.items, item)
+
+	SPAWNGARLIC:
+		for i := 0; i < 5; i++ {
+			for _, levelItem := range g.level.items {
+				if levelItem != item && item.itemType == itemTypeGarlic {
+					dx, dy := deltaXY(item.x, item.y, levelItem.x, levelItem.y)
+					if dx < 21 || dy < 21 {
+						item.x, item.y = g.level.newSpawnLocation()
+						continue SPAWNGARLIC
+					}
+				}
+			}
+			break
+		}
 
 		if g.debugMode {
 			g.flashMessage("SPAWN GARLIC")
@@ -708,31 +755,40 @@ UPDATEPROJECTILES:
 	}
 
 	// Spawn holy water.
-	if g.tick%(144*120) == 0 || rand.Intn(666) == 0 {
+	if g.tick%(144*30) == 0 || rand.Intn(6666) == 0 {
 		item := g.newItem(itemTypeHolyWater)
 		g.level.items = append(g.level.items, item)
+
+	SPAWNHOLYWATER:
+		for i := 0; i < 5; i++ {
+			for _, levelItem := range g.level.items {
+				if levelItem != item && item.itemType == itemTypeHolyWater {
+					dx, dy := deltaXY(item.x, item.y, levelItem.x, levelItem.y)
+					if dx < 21 || dy < 21 {
+						item.x, item.y = g.level.newSpawnLocation()
+						continue SPAWNHOLYWATER
+					}
+				}
+			}
+			break
+		}
 
 		if g.debugMode {
 			g.flashMessage("SPAWN HOLY WATER")
 		}
 	}
 
-	maxCreeps := 666
+	maxCreeps := 333
 	if g.levelNum == 2 {
-		maxCreeps = 1999
+		maxCreeps = 666
 	} else if g.levelNum == 3 {
-		maxCreeps = 3333
+		maxCreeps = 999
 	}
 	if len(g.level.creeps) < maxCreeps {
 		// Spawn vampires.
 		if g.tick%144 == 0 {
-			spawnAmount := rand.Intn(26 + (g.tick / (144 * 3)))
-			minCreeps := 0
-			if g.levelNum == 2 {
-				minCreeps = 500
-			} else if g.levelNum == 3 {
-				minCreeps = 1000
-			}
+			spawnAmount := rand.Intn(1 + (g.tick / (144 * 9)))
+			minCreeps := g.level.requiredSouls * 2
 			if len(g.level.creeps) < minCreeps {
 				spawnAmount *= 4
 			}
@@ -745,7 +801,7 @@ UPDATEPROJECTILES:
 		}
 
 		// Spawn bats.
-		if g.tick%144 == 0 {
+		if g.tick%(144*(4-g.levelNum)) == 0 {
 			spawnAmount := g.tick / 288
 			if spawnAmount < 1 {
 				spawnAmount = 1
@@ -791,9 +847,6 @@ UPDATEPROJECTILES:
 	if ebiten.IsKeyPressed(ebiten.KeyControl) {
 		spawnAmount := 13
 		switch {
-		case inpututil.IsKeyJustPressed(ebiten.KeyE):
-			g.player.x, g.player.y = float64(g.level.exitX), float64(g.level.exitY+1)
-			g.flashMessage("WARPED TO EXIT")
 		case inpututil.IsKeyJustPressed(ebiten.KeyF):
 			g.fullBrightMode = !g.fullBrightMode
 			if g.fullBrightMode {
@@ -868,12 +921,34 @@ UPDATEPROJECTILES:
 		case ebiten.IsKeyPressed(ebiten.KeyShift) && inpututil.IsKeyJustPressed(ebiten.KeyEqual):
 			g.showWinScreen()
 			g.flashMessage("WARPED TO WIN SCREEN")
+		case inpututil.IsKeyJustPressed(ebiten.KeyMinus):
+			if g.player.soulsRescued < g.level.requiredSouls {
+				g.player.soulsRescued = g.level.requiredSouls
+				g.checkLevelComplete()
+				g.flashMessage("SKIPPED SOUL COLLECTION")
+			} else {
+				g.player.x, g.player.y = float64(g.level.exitX)+0.5, float64(g.level.exitY+2)
+				g.flashMessage("WARPED TO EXIT")
+			}
 		case inpututil.IsKeyJustPressed(ebiten.KeyEqual):
 			err := g.nextLevel()
 			if err != nil {
 				return err
 			}
 			g.flashMessage(fmt.Sprintf("WARPED TO LEVEL %d", g.levelNum))
+		}
+	}
+
+	// Check if player is exiting level.
+	if !g.level.exitOpenTime.IsZero() {
+		exitThreshold := 1.1
+		dx1, dy1 := deltaXY(g.player.x, g.player.y, float64(g.level.exitX), float64(g.level.exitY))
+		dx2, dy2 := deltaXY(g.player.x, g.player.y, float64(g.level.exitX+1), float64(g.level.exitY))
+		if (dx1 <= exitThreshold && dy1 <= exitThreshold) || (dx2 <= exitThreshold && dy2 <= exitThreshold) {
+			err := g.nextLevel()
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -971,7 +1046,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 
 	if g.gameOverTime.IsZero() {
 		// Draw health.
-		healthScale := 1.3
+		healthScale := 1.5
 		heartSpace := int(32 * healthScale)
 		heartY := float64(g.h - screenPadding - heartSpace)
 		for i := 0; i < g.player.health; i++ {
@@ -981,19 +1056,19 @@ func (g *game) Draw(screen *ebiten.Image) {
 			screen.DrawImage(imageAtlas[ImageHeart], g.op)
 		}
 
-		scale := 4.0
+		scale := 5.0
 		soulsY := float64(g.h-int(scale*14)) - screenPadding
 		if g.level.exitOpenTime.IsZero() {
 			// Draw souls.
 			soulsLabel := fmt.Sprintf("%d", g.level.requiredSouls-g.player.soulsRescued)
 
-			soulImgSize := 50.0
+			soulImgSize := 46.0
 
-			soulsX := float64(g.w-screenPadding) - (float64((len(soulsLabel)) * 4 * 6)) - soulImgSize
+			soulsX := float64(g.w-screenPadding) - (float64((len(soulsLabel)) * int(scale) * 6)) - 2 - soulImgSize
 
 			soulImgScale := 1.5
 			g.op.GeoM.Reset()
-			g.op.GeoM.Translate((soulsX+soulImgSize)/soulImgScale, (soulsY+9)/soulImgScale)
+			g.op.GeoM.Translate((float64(g.w-screenPadding)-soulImgSize)/soulImgScale, (soulsY+19)/soulImgScale)
 			g.op.GeoM.Scale(soulImgScale, soulImgScale)
 			screen.DrawImage(ojasDungeonSS.Soul1, g.op)
 
@@ -1001,7 +1076,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 		} else {
 			// Draw exit message.
 			if time.Since(g.level.exitOpenTime).Milliseconds()%2000 < 1500 {
-				g.drawCenteredText(screen, 0, soulsY, scale, 1.0, "EXIT OPEN")
+				g.drawText(screen, float64(g.w-screenPadding)-(float64(9)*scale*6), soulsY, scale, 1.0, "EXIT OPEN")
 			}
 		}
 	}
@@ -1103,9 +1178,14 @@ func (g *game) levelColorScale(x, y float64) float64 {
 	if t == nil {
 		return 0
 	}
+
 	tileV := t.colorScale
 
 	s := math.Min(1, v+tileV)
+
+	if t.forceColorScale != 0 {
+		return t.forceColorScale
+	}
 
 	return s
 }
@@ -1217,6 +1297,7 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 		}
 	}
 
+	// Render top tiles.
 	var t *Tile
 	for y := 0; y < g.level.h; y++ {
 		for x := 0; x < g.level.w; x++ {
@@ -1251,6 +1332,38 @@ func (g *game) renderLevel(screen *ebiten.Image) int {
 
 	if g.gameWon {
 		drawCreeps()
+	}
+
+	// Render side and bottom walls a second time.
+	if g.level.sideWalls != nil {
+		for y := 0; y < g.level.h; y++ {
+			for x := 0; x < g.level.w; x++ {
+				t = g.level.sideWalls[y][x]
+				if t == nil {
+					continue // No tile at this position.
+				}
+
+				drawn += g.renderSprite(float64(x), float64(y), 0, 0, 0, 1.0, 1.0, 1.0, blackSquare, screen)
+			}
+		}
+	}
+	if g.level.otherWalls != nil {
+		for y := 0; y < g.level.h; y++ {
+			for x := 0; x < g.level.w; x++ {
+				t = g.level.otherWalls[y][x]
+				if t == nil {
+					t = g.level.tiles[y][x]
+					if t == nil || len(t.sprites) == 0 {
+						drawn += g.renderSprite(float64(x), float64(y), 0, 0, 0, 1.0, 1.0, 1.0, blackSquare, screen)
+					}
+					continue // No tile at this position.
+				}
+
+				for i := range t.sprites {
+					drawn += g.renderSprite(float64(x), float64(y), 0, 0, 0, 1.0, g.levelColorScale(float64(x), float64(y)), 1.0, t.sprites[i], screen)
+				}
+			}
+		}
 	}
 
 	return drawn
@@ -1320,7 +1433,7 @@ func (g *game) hurtCreep(c *gameCreep, damage int) error {
 	/*
 		if c.creepType == TypeBat {
 			dieSound = SoundBat
-			volume = batDieVolume
+			volume = batVolume
 		} else {
 			dieSound = SoundVampireDie1
 			if rand.Intn(2) == 1 {

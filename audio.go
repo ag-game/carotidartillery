@@ -14,8 +14,8 @@ const (
 	SoundBat
 	SoundPlayerHurt
 	SoundPlayerDie
+	SoundPickup
 	SoundMunch
-	SoundGib
 )
 
 var soundMap = map[int]string{
@@ -25,6 +25,7 @@ var soundMap = map[int]string{
 	SoundBat:         "assets/audio/bat.wav",
 	SoundPlayerHurt:  "assets/audio/playerhurt.wav",
 	SoundPlayerDie:   "assets/audio/playerdie.wav",
+	SoundPickup:      "assets/audio/pickup.wav",
 	SoundMunch:       "assets/audio/munch.wav",
 }
 var soundAtlas [][]*audio.Player

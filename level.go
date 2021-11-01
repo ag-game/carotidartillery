@@ -20,6 +20,10 @@ type Level struct {
 	tiles    [][]*Tile // (Y,X) array of tiles
 	tileSize int
 
+	topWalls   [][]*Tile
+	sideWalls  [][]*Tile
+	otherWalls [][]*Tile
+
 	items []*gameItem
 
 	creeps     []*gameCreep
@@ -37,81 +41,30 @@ type Level struct {
 	requiredSouls int
 }
 
-// Tile returns the tile at the provided coordinates, or nil.
-func (l *Level) Tile(x, y int) *Tile {
-	if x >= 0 && y >= 0 && x < l.w && y < l.h {
-		return l.tiles[y][x]
-	}
-	return nil
-}
-
-// Size returns the size of the Level.
-func (l *Level) Size() (width, height int) {
-	return l.w, l.h
-}
-
-func (l *Level) isFloor(x float64, y float64) bool {
-	t := l.Tile(int(math.Floor(x+.5)), int(math.Floor(y+.5)))
-	if t == nil {
-		return false
-	}
-	if !t.floor {
-		return false
-	}
-	return true
-}
-
-func (l *Level) newSpawnLocation() (float64, float64) {
-SPAWNLOCATION:
-	for {
-		x := float64(1 + rand.Intn(l.w-2))
-		y := float64(1 + rand.Intn(l.h-2))
-
-		if !l.isFloor(x, y) {
-			continue
-		}
-
-		// Too close to player.
-		playerSafeSpace := 18.0
-		dx, dy := deltaXY(x, y, l.player.x, l.player.y)
-		if dx <= playerSafeSpace && dy <= playerSafeSpace {
-			continue
-		}
-
-		// Too close to garlic or holy water.
-		garlicSafeSpace := 2.0
-		for _, item := range l.items {
-			if item.health == 0 {
-				continue
-			}
-
-			dx, dy = deltaXY(x, y, item.x, item.y)
-			if dx <= garlicSafeSpace && dy <= garlicSafeSpace {
-				continue SPAWNLOCATION
-			}
-		}
-
-		return x, y
-	}
-
-}
-
 // NewLevel returns a new randomly generated Level.
 func NewLevel(levelNum int, p *gamePlayer) (*Level, error) {
-	div := 4 - levelNum
+	levelSize := 100
+	if levelNum == 2 {
+		levelSize = 108
+	} else if levelNum == 3 {
+		levelSize = 116
+	} else if levelSize == 4 {
+		levelSize = 256
+	}
+	// Note: Level size must be divisible by the dungeon scale (4).
 	l := &Level{
 		num:      levelNum,
-		w:        336 / div,
-		h:        336 / div,
+		w:        levelSize,
+		h:        levelSize,
 		tileSize: 32,
 		player:   p,
 	}
 
-	l.requiredSouls = 66
+	l.requiredSouls = 33
 	if levelNum == 2 {
-		l.requiredSouls = 666
+		l.requiredSouls = 66
 	} else if levelNum == 3 {
-		l.requiredSouls = 6666
+		l.requiredSouls = 99
 	}
 
 	var err error
@@ -120,10 +73,12 @@ func NewLevel(levelNum int, p *gamePlayer) (*Level, error) {
 		return nil, fmt.Errorf("failed to load embedded spritesheet: %s", err)
 	}
 
-	rooms := 33
-	/*if multiplier == 2 {
-		rooms = 66
-	}*/
+	rooms := 13
+	if levelNum == 2 {
+		rooms = 26
+	} else if levelNum == 3 {
+		rooms = 33
+	}
 	d := dungeon.NewDungeon(l.w/dungeonScale, rooms)
 	dungeonFloor := 1
 	l.tiles = make([][]*Tile, l.h)
@@ -164,7 +119,18 @@ func NewLevel(levelNum int, p *gamePlayer) (*Level, error) {
 		return t.floor
 	}
 
+	l.topWalls = make([][]*Tile, l.h)
+	l.sideWalls = make([][]*Tile, l.h)
+	l.otherWalls = make([][]*Tile, l.h)
+	for y := 0; y < l.h; y++ {
+		l.topWalls[y] = make([]*Tile, l.w)
+		l.sideWalls[y] = make([]*Tile, l.w)
+		l.otherWalls[y] = make([]*Tile, l.w)
+	}
+
+	// Entrance and exit candidates.
 	var topWalls [][2]int
+	var bottomWalls [][2]int
 
 	// Add walls.
 	for x := 0; x < l.w; x++ {
@@ -213,47 +179,145 @@ func NewLevel(levelNum int, p *gamePlayer) (*Level, error) {
 						l.torches = append(l.torches, c)
 					} else {
 						neighbor.AddSprite(sandstoneSS.WallTop)
-						topWalls = append(topWalls, [2]int{nx, ny})
+
+						farRight := floorTile(nx+2, ny)
+						farBottomRight := floorTile(nx+2, ny+1)
+						if bottomRight && farBottomRight && !right && !farRight && y > 2 {
+							topWalls = append(topWalls, [2]int{nx, ny})
+						}
 					}
+
+					l.topWalls[ny][nx] = neighbor
 				case spriteLeft:
 					if spriteBottom {
 						neighbor.AddSprite(sandstoneSS.WallBottom)
 					}
 					neighbor.AddSprite(sandstoneSS.WallLeft)
+
+					l.sideWalls[ny][nx] = neighbor
+					l.otherWalls[ny][nx] = neighbor
 				case spriteRight:
 					if spriteBottom {
 						neighbor.AddSprite(sandstoneSS.WallBottom)
 					}
 					neighbor.AddSprite(sandstoneSS.WallRight)
+
+					l.sideWalls[ny][nx] = neighbor
+					l.otherWalls[ny][nx] = neighbor
 				case spriteBottomLeft:
 					neighbor.AddSprite(sandstoneSS.WallBottomLeft)
+
+					l.sideWalls[ny][nx] = neighbor
+					l.otherWalls[ny][nx] = neighbor
 				case spriteBottomRight:
 					neighbor.AddSprite(sandstoneSS.WallBottomRight)
+
+					l.sideWalls[ny][nx] = neighbor
+					l.otherWalls[ny][nx] = neighbor
 				case spriteBottom:
 					neighbor.AddSprite(sandstoneSS.WallBottom)
+
+					l.otherWalls[ny][nx] = neighbor
+
+					farRight := floorTile(nx+2, ny)
+					farTopRight := floorTile(nx+2, ny-1)
+					if topRight && farTopRight && !right && !farRight && ny < l.h-3 {
+						bottomWalls = append(bottomWalls, [2]int{nx, ny})
+					}
 				}
 			}
 		}
 	}
 
-	entrance := topWalls[rand.Intn(len(topWalls))]
-	exit := entrance
-	for exit == entrance {
-		exit = topWalls[rand.Intn(len(topWalls))]
+	for {
+		entrance := bottomWalls[rand.Intn(len(bottomWalls))]
+		l.enterX, l.enterY = entrance[0], entrance[1]
+
+		exit := topWalls[rand.Intn(len(topWalls))]
+		l.exitX, l.exitY = exit[0], exit[1]
+
+		dx, dy := deltaXY(float64(l.enterX), float64(l.enterY), float64(l.exitX), float64(l.exitY))
+		if dy >= 8 || dx >= 6 {
+			break
+		}
 	}
 
-	l.enterX, l.enterY = entrance[0], entrance[1]
-	l.exitX, l.exitY = exit[0], exit[1]
+	fadeA := 0.15
+	fadeB := 0.1
 
+	// Add entrance.
 	if levelNum > 1 {
-		l.Tile(l.enterX, l.enterY).sprites = nil
-		l.Tile(l.enterX, l.enterY).AddSprite(sandstoneSS.FloorA)
-		l.Tile(l.enterX, l.enterY).AddSprite(sandstoneSS.DoorClosed)
+		t := l.Tile(l.enterX, l.enterY)
+		t.sprites = nil
+		t.AddSprite(sandstoneSS.FloorA)
+		t.AddSprite(sandstoneSS.BottomDoorClosedL)
+		t.AddSprite(sandstoneSS.WallLeft)
+
+		t = l.Tile(l.enterX+1, l.enterY)
+		t.sprites = nil
+		t.AddSprite(sandstoneSS.FloorA)
+		t.AddSprite(sandstoneSS.BottomDoorClosedR)
+		t.AddSprite(sandstoneSS.WallRight)
+
+		// Add fading entrance hall.
+		for i := 1; i < 3; i++ {
+			colorScale := fadeA
+			if i == 2 {
+				colorScale = fadeB
+			}
+
+			t = l.Tile(l.enterX, l.enterY+i)
+			if t != nil {
+				t.AddSprite(sandstoneSS.FloorA)
+				t.AddSprite(sandstoneSS.WallLeft)
+				t.forceColorScale = colorScale
+			}
+
+			t = l.Tile(l.enterX+1, l.enterY+i)
+			if t != nil {
+				t.AddSprite(sandstoneSS.FloorA)
+				t.AddSprite(sandstoneSS.WallRight)
+				t.forceColorScale = colorScale
+			}
+		}
 	}
 
-	l.Tile(l.exitX, l.exitY).sprites = nil
-	l.Tile(l.exitX, l.exitY).AddSprite(sandstoneSS.FloorA)
-	l.Tile(l.exitX, l.exitY).AddSprite(sandstoneSS.DoorClosed)
+	// Add exit.
+	t := l.Tile(l.exitX, l.exitY)
+	t.sprites = nil
+	t.AddSprite(sandstoneSS.FloorA)
+	t.AddSprite(sandstoneSS.TopDoorClosedL)
+
+	t = l.Tile(l.exitX+1, l.exitY)
+	t.sprites = nil
+	t.AddSprite(sandstoneSS.FloorA)
+	t.AddSprite(sandstoneSS.TopDoorClosedR)
+
+	// Add fading exit hall.
+	for i := 1; i < 3; i++ {
+		colorScale := fadeA
+		if i == 2 {
+			colorScale = fadeB
+		}
+
+		t = l.Tile(l.exitX, l.exitY-i)
+		if t != nil {
+			t.AddSprite(sandstoneSS.FloorA)
+			t.AddSprite(sandstoneSS.WallLeft)
+			t.forceColorScale = colorScale
+		}
+
+		t = l.Tile(l.exitX+1, l.exitY-i)
+		if t != nil {
+			t.AddSprite(sandstoneSS.FloorA)
+			t.AddSprite(sandstoneSS.WallRight)
+			t.forceColorScale = colorScale
+		}
+	}
+
+	// TODO make it more obvious players should enter it (arrow on first level?)
+
+	// TODO two frame sprite arrow animation
 
 	// TODO special door for final exit
 
@@ -262,17 +326,85 @@ func NewLevel(levelNum int, p *gamePlayer) (*Level, error) {
 	return l, nil
 }
 
+// Tile returns the tile at the provided coordinates, or nil.
+func (l *Level) Tile(x, y int) *Tile {
+	if x >= 0 && y >= 0 && x < l.w && y < l.h {
+		return l.tiles[y][x]
+	}
+	return nil
+}
+
+// Size returns the size of the Level.
+func (l *Level) Size() (width, height int) {
+	return l.w, l.h
+}
+
+func (l *Level) isFloor(x float64, y float64) bool {
+	t := l.Tile(int(math.Floor(x+.5)), int(math.Floor(y+.5)))
+	if t == nil {
+		return false
+	}
+	if !t.floor {
+		return false
+	}
+	return true
+}
+
+func (l *Level) newSpawnLocation() (float64, float64) {
+SPAWNLOCATION:
+	for {
+		x := float64(1 + rand.Intn(l.w-2))
+		y := float64(1 + rand.Intn(l.h-2))
+
+		if !l.isFloor(x, y) {
+			continue
+		}
+
+		// Too close to player.
+		playerSafeSpace := 11.0
+		dx, dy := deltaXY(x, y, l.player.x, l.player.y)
+		if dx <= playerSafeSpace && dy <= playerSafeSpace {
+			continue
+		}
+
+		// Too close to entrance.
+		exitSafeSpace := 9.0
+		dx, dy = deltaXY(x, y, float64(l.enterX), float64(l.enterY))
+		if dx <= exitSafeSpace && dy <= exitSafeSpace {
+			continue
+		}
+
+		// Too close to garlic or holy water.
+		garlicSafeSpace := 2.0
+		for _, item := range l.items {
+			if item.health == 0 {
+				continue
+			}
+
+			dx, dy = deltaXY(x, y, item.x, item.y)
+			if dx <= garlicSafeSpace && dy <= garlicSafeSpace {
+				continue SPAWNLOCATION
+			}
+		}
+
+		return x, y
+	}
+
+}
+
 func (l *Level) bakeLightmap() {
 	for x := 0; x < l.w; x++ {
 		for y := 0; y < l.h; y++ {
 			t := l.tiles[y][x]
-			v := 0.0
-			for _, torch := range l.torches {
-				if torch.health == 0 {
-					continue
+			v := t.forceColorScale
+			if v == 0 {
+				for _, torch := range l.torches {
+					if torch.health == 0 {
+						continue
+					}
+					torchV := colorScaleValue(float64(x), float64(y), torch.x, torch.y)
+					v += torchV
 				}
-				torchV := colorScaleValue(float64(x), float64(y), torch.x, torch.y)
-				v += torchV
 			}
 			t.colorScale = v
 		}

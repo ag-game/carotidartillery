@@ -109,6 +109,7 @@ func newCreep(creepType int, l *Level, p *gamePlayer) *gameCreep {
 }
 
 func (c *gameCreep) queueNextAction() {
+	c.tick = 0
 	if c.creepType == TypeBat {
 		c.nextAction = 288 + rand.Intn(288)
 		return
@@ -308,8 +309,10 @@ func (c *gameCreep) Update() {
 		c.x, c.y = x, y
 	} else if c.level.isFloor(x, c.y) {
 		c.x = x
+		c.moveY *= -1
 	} else if c.level.isFloor(c.x, y) {
 		c.y = y
+		c.moveX *= -1
 	} else {
 		c.nextAction = 0
 		return
@@ -322,8 +325,9 @@ func (c *gameCreep) Update() {
 		}
 	}
 
+	// Avoid garlic.
 	for _, item := range c.level.items {
-		if item.health == 0 {
+		if item.health == 0 || item.itemType != itemTypeGarlic {
 			continue
 		}
 
